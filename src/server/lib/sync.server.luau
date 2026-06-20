@@ -1,12 +1,17 @@
 local Players = game:GetService("Players")
 
+local Charm = require("../../../modules/Charm")
 local CharmSync = require("../../../modules/CharmSync")
+local accountStore = require("../stores/accountStore")
 local gameStore = require("../../shared/stores/gameStore")
 local remotes = require("../../shared/remotes")
 
 local function onPlayerAdded(player: Player)
 	CharmSync.server.addSignalsToClient(player, {
 		game = gameStore.getState,
+		[`account-{player.Name}`] = Charm.computed(function()
+			return accountStore.getAccount(player.Name)
+		end),
 	})
 end
 
