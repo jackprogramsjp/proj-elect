@@ -12161,11 +12161,9 @@ return Promise
 				count += 1
 			end)
 
-			root
-				:andThen(function()
-					count += 1
-				end)
-				:cancel()
+			root:andThen(function()
+				count += 1
+			end):cancel()
 
 			resolve("foo")
 
@@ -13470,29 +13468,29 @@ return vide
             <Properties>
               <string name="Name">action</string>
               <string name="Source"><![CDATA[type Action = {
-    priority: number,
-    callback: (Instance) -> ()
+	priority: number,
+	callback: (Instance) -> (),
 }
 
-local ActionMT = table.freeze {}
+local ActionMT = table.freeze({})
 
 local function is_action(v: any)
-    return getmetatable(v) == ActionMT
+	return getmetatable(v) == ActionMT
 end
 
 local function action(callback: (Instance) -> (), priority: number?): Action
-    local a = {
-        priority = priority or 1,
-        callback = callback
-    }
+	local a = {
+		priority = priority or 1,
+		callback = callback,
+	}
 
-    setmetatable(a :: any, ActionMT)
+	setmetatable(a :: any, ActionMT)
 
-    return table.freeze(a)
+	return table.freeze(a)
 end
 
 return function()
-    return action, is_action
+	return action, is_action
 end
 ]]></string>
             </Properties>
@@ -13500,165 +13498,175 @@ end
           <Item class="ModuleScript" referent="44">
             <Properties>
               <string name="Name">apply</string>
-              <string name="Source"><![CDATA[local typeof = game and typeof or require "../test/mock".typeof :: never
+              <string name="Source"><![CDATA[local typeof = game and typeof or require("../test/mock").typeof :: never
 
-local flags = require "./flags"
-local implicit_effect = require "./implicit_effect"
-local _, is_action = require "./action"()
-local graph = require "./graph"
+local flags = require("./flags")
+local implicit_effect = require("./implicit_effect")
+local _, is_action = require("./action")()
+local graph = require("./graph")
 type Node<T> = graph.Node<T>
 
 type Array<V> = { V }
-type ArrayOrV<V> = {ArrayOrV<V>} | V
+type ArrayOrV<V> = { ArrayOrV<V> } | V
 type Map<K, V> = { [K]: V }
 
 type Cache = {
-    -- event listeners to connect after properties are set
-    events: Array<
-        | string -- 1. event name
-        | () -> () -- 2. listener
-    >,
+	-- event listeners to connect after properties are set
+	events: Array<
+		| string -- 1. event name
+		| () -> () -- 2. listener
+	>,
 
-    -- actions to run after events are connected
-    actions: Map<
-        number, -- priority
-        Array<(Instance) -> ()> -- action callbacks
-    >,
+	-- actions to run after events are connected
+	actions: Map<
+		number, -- priority
+		Array<(Instance) -> ()> -- action callbacks
+	>,
 
-    -- what to parent the instance to after running actions
-    parent: unknown,
+	-- what to parent the instance to after running actions
+	parent: unknown,
 
-    -- cache to detect duplicate property setting at same nesting depth
-    nested_debug: Map<
-        number, -- depth
-        Map<string, true> -- set of property names
-    >,
+	-- cache to detect duplicate property setting at same nesting depth
+	nested_debug: Map<
+		number, -- depth
+		Map<string, true> -- set of property names
+	>,
 
-    -- each nested layer occupies two indexes: 1. table ref 2. nested depth
-    -- e.g. { t1 = { t3 = {} }, t2 = {} } -> { t1, 1, t2, 1, t3, 2 }
-    nested_stack: { {} | number }
+	-- each nested layer occupies two indexes: 1. table ref 2. nested depth
+	-- e.g. { t1 = { t3 = {} }, t2 = {} } -> { t1, 1, t2, 1, t3, 2 }
+	nested_stack: { {} | number },
 }
 
 local free_cache: Cache?
 
 local function borrow_cache(): Cache
-    if free_cache then
-        local cache = free_cache
-        free_cache = nil
-        return cache
-    else
-        return {
-            events = {},
-            actions = setmetatable({} :: any, { -- lazy init
-                __index = function(self, i) self[i] = {}; return self[i] end
-            }),
-            parent = nil,
-            nested_debug = setmetatable({} :: any, {
-                __index = function(self, i: number) self[i] = {}; return self[i] end
-            }),
-            nested_stack = {}
-        }
-    end
+	if free_cache then
+		local cache = free_cache
+		free_cache = nil
+		return cache
+	else
+		return {
+			events = {},
+			actions = setmetatable({} :: any, { -- lazy init
+				__index = function(self, i)
+					self[i] = {}
+					return self[i]
+				end,
+			}),
+			parent = nil,
+			nested_debug = setmetatable({} :: any, {
+				__index = function(self, i: number)
+					self[i] = {}
+					return self[i]
+				end,
+			}),
+			nested_stack = {},
+		}
+	end
 end
 
-local function return_cache(cache: Cache )
-    free_cache = cache
+local function return_cache(cache: Cache)
+	free_cache = cache
 end
 
 local function process_properties(properties: Map<unknown, unknown>, instance: Instance, cache: Cache, depth: number)
-    for property, value in properties do
-        if type(property) == "string" then
-            if flags.strict then -- check for duplicate property assignment at nesting depth
-                if cache.nested_debug[depth][property] then
-                    error(`duplicate property {property} at depth {depth}`, 0)
-                end
-                cache.nested_debug[depth][property] = true
-            end
+	for property, value in properties do
+		if type(property) == "string" then
+			if flags.strict then -- check for duplicate property assignment at nesting depth
+				if cache.nested_debug[depth][property] then
+					error(`duplicate property {property} at depth {depth}`, 0)
+				end
+				cache.nested_debug[depth][property] = true
+			end
 
-            if property == "Parent" then
-                cache.parent = value
-                continue
-            end
+			if property == "Parent" then
+				cache.parent = value
+				continue
+			end
 
-            if type(value) == "function" then 
-                if typeof((instance :: any)[property]) == "RBXScriptSignal" then
-                    table.insert(cache.events, property) -- add event name to buffer
-                    table.insert(cache.events, value :: () -> ()) -- add event listener to buffer
-                else
-                    implicit_effect.property(instance, property, value :: () -> ()) -- create implicit effect for property
-                end
-            else
-                (instance :: any)[property] = value -- set property
-            end    
-        elseif type(property) == "number" then
-            if type(value) == "function" then
-                implicit_effect.children(instance, value :: () -> ArrayOrV<Instance>) -- bind children
-            elseif type(value) == "table" then
-                if is_action(value) then
-                    table.insert(cache.actions[(value :: any).priority], (value :: any).callback :: () -> ()) -- add action to buffer
-                elseif flags.defer_nested_properties then
-                    table.insert(cache.nested_stack, value :: {})
-                    table.insert(cache.nested_stack, depth + 1) -- push table to stack for later processing
-                else
-                    process_properties(value :: Map<unknown, unknown>, instance, cache, depth + 1)
-                end
-            elseif type(value) == "userdata" then
-                (value :: Instance).Parent = instance -- parent child
-            end
-        end
-    end
+			if type(value) == "function" then
+				if typeof((instance :: any)[property]) == "RBXScriptSignal" then
+					table.insert(cache.events, property) -- add event name to buffer
+					table.insert(cache.events, value :: () -> ()) -- add event listener to buffer
+				else
+					implicit_effect.property(instance, property, value :: () -> ()) -- create implicit effect for property
+				end
+			else
+				(instance :: any)[property] = value -- set property
+			end
+		elseif type(property) == "number" then
+			if type(value) == "function" then
+				implicit_effect.children(instance, value :: () -> ArrayOrV<Instance>) -- bind children
+			elseif type(value) == "table" then
+				if is_action(value) then
+					table.insert(cache.actions[(value :: any).priority], (value :: any).callback :: () -> ()) -- add action to buffer
+				elseif flags.defer_nested_properties then
+					table.insert(cache.nested_stack, value :: {})
+					table.insert(cache.nested_stack, depth + 1) -- push table to stack for later processing
+				else
+					process_properties(value :: Map<unknown, unknown>, instance, cache, depth + 1)
+				end
+			elseif type(value) == "userdata" then
+				(value :: Instance).Parent = instance -- parent child
+			end
+		end
+	end
 end
 
 -- applies table of nested properties to an instance using full vide semantics
 local function apply<T>(instance: T & Instance, properties: { [unknown]: unknown }): T
-    if not properties then
-        error "attempt to call a constructor returned by create() with no properties"
-    end
+	if not properties then
+		error("attempt to call a constructor returned by create() with no properties")
+	end
 
-    local caches = borrow_cache()
-    local events = caches.events
-    local actions = caches.actions
-    local nested_debug = caches.nested_debug
-    local nested_stack = caches.nested_stack
+	local caches = borrow_cache()
+	local events = caches.events
+	local actions = caches.actions
+	local nested_debug = caches.nested_debug
+	local nested_stack = caches.nested_stack
 
-    -- process all properties
-    local depth = 1
-    repeat
-        process_properties(properties, instance, caches, depth)
-        depth = table.remove(nested_stack) :: number
-        properties = table.remove(nested_stack) :: {}
-    until not properties
+	-- process all properties
+	local depth = 1
+	repeat
+		process_properties(properties, instance, caches, depth)
+		depth = table.remove(nested_stack) :: number
+		properties = table.remove(nested_stack) :: {}
+	until not properties
 
-    for i = 1, #events, 2 do
-        local event_name = events[i]
-        local event_listener = events[i + 1]
-        ;(instance :: any)[event_name]:Connect(event_listener)
-    end
+	for i = 1, #events, 2 do
+		local event_name = events[i]
+		local event_listener = events[i + 1];
+		(instance :: any)[event_name]:Connect(event_listener)
+	end
 
-    for _, queued in actions do
-        for _, callback in queued do
-            callback(instance)
-        end
-    end
+	for _, queued in actions do
+		for _, callback in queued do
+			callback(instance)
+		end
+	end
 
-    local parent = caches.parent
-    if parent then
-        if type(parent) == "function" then
-            implicit_effect.parent(instance, parent :: () -> Instance)
-        else
-            instance.Parent = parent :: Instance
-        end
-    end
+	local parent = caches.parent
+	if parent then
+		if type(parent) == "function" then
+			implicit_effect.parent(instance, parent :: () -> Instance)
+		else
+			instance.Parent = parent :: Instance
+		end
+	end
 
-    table.clear(events)
-    for _, queued in actions do table.clear(queued) end
-    caches.parent = nil
-    if flags.strict then table.clear(nested_debug) end
-    table.clear(nested_stack)
+	table.clear(events)
+	for _, queued in actions do
+		table.clear(queued)
+	end
+	caches.parent = nil
+	if flags.strict then
+		table.clear(nested_debug)
+	end
+	table.clear(nested_stack)
 
-    return_cache(caches)
+	return_cache(caches)
 
-    return instance
+	return instance
 end
 
 return apply
@@ -13668,26 +13676,28 @@ return apply
           <Item class="ModuleScript" referent="45">
             <Properties>
               <string name="Name">batch</string>
-              <string name="Source"><![CDATA[local flags = require "./flags"
-local graph = require "./graph"
+              <string name="Source"><![CDATA[local flags = require("./flags")
+local graph = require("./graph")
 
 local function batch(setter: () -> ())
-    local already_batching = flags.batch
-    local from
+	local already_batching = flags.batch
+	local from
 
-    if not already_batching then
-        flags.batch = true
-        from = graph.get_update_queue_length()
-    end
+	if not already_batching then
+		flags.batch = true
+		from = graph.get_update_queue_length()
+	end
 
-    local ok, err: string? = xpcall(setter, debug.traceback)
+	local ok, err: string? = xpcall(setter, debug.traceback)
 
-    if not already_batching then
-        flags.batch = false
-        graph.flush_update_queue(from)
-    end
+	if not already_batching then
+		flags.batch = false
+		graph.flush_update_queue(from)
+	end
 
-    if not ok then error(`error occured while batching updates: {err}`, 0) end
+	if not ok then
+		error(`error occured while batching updates: {err}`, 0)
+	end
 end
 
 return batch
@@ -13697,7 +13707,7 @@ return batch
           <Item class="ModuleScript" referent="46">
             <Properties>
               <string name="Name">branch</string>
-              <string name="Source"><![CDATA[local graph = require "./graph"
+              <string name="Source"><![CDATA[local graph = require("./graph")
 type Node<T> = graph.Node<T>
 local create_node = graph.create_node
 local push_scope = graph.push_scope
@@ -13706,34 +13716,34 @@ local destroy = graph.destroy
 local get_scope = graph.get_scope
 
 local function branch<T>(fn: () -> T): (() -> (), T)
-    local current = get_scope()
-    if not current then
-        error(`cannot use branch() outside a stable or reactive scope`, 0)
-    end
+	local current = get_scope()
+	if not current then
+		error(`cannot use branch() outside a stable or reactive scope`, 0)
+	end
 
-    local parent = current.owner
-    if not parent then
-        error(`current scope is not owned by a scope`, 0)
-    end
+	local parent = current.owner
+	if not parent then
+		error(`current scope is not owned by a scope`, 0)
+	end
 
-    local node = create_node(parent, false, false)
+	local node = create_node(parent, false, false)
 
-    local destroy = function()
-        destroy(node)
-    end
+	local destroy = function()
+		destroy(node)
+	end
 
-    push_scope(node)
+	push_scope(node)
 
-    local ok, result = xpcall(fn, debug.traceback)
+	local ok, result = xpcall(fn, debug.traceback)
 
-    pop_scope()
+	pop_scope()
 
-    if not ok then
-        destroy()
-        error(`error while running branch():\n\n{result}`, 0)
-    end
+	if not ok then
+		destroy()
+		error(`error while running branch():\n\n{result}`, 0)
+	end
 
-    return destroy, result
+	return destroy, result
 end
 
 return branch
@@ -13743,21 +13753,21 @@ return branch
           <Item class="ModuleScript" referent="47">
             <Properties>
               <string name="Name">changed</string>
-              <string name="Source"><![CDATA[local action = require "./action"()
-local cleanup = require "./cleanup"
+              <string name="Source"><![CDATA[local action = require("./action")()
+local cleanup = require("./cleanup")
 
 local function changed<T>(property: string, callback: (T) -> ())
-    return action(function(instance)
-        local con = instance:GetPropertyChangedSignal(property):Connect(function()
-            callback((instance :: any)[property])
-        end)
+	return action(function(instance)
+		local con = instance:GetPropertyChangedSignal(property):Connect(function()
+			callback((instance :: any)[property])
+		end)
 
-        cleanup(function()
-            con:Disconnect()
-        end)
+		cleanup(function()
+			con:Disconnect()
+		end)
 
-        callback((instance :: any)[property])
-    end)
+		callback((instance :: any)[property])
+	end)
 end
 
 return changed
@@ -13767,56 +13777,64 @@ return changed
           <Item class="ModuleScript" referent="48">
             <Properties>
               <string name="Name">cleanup</string>
-              <string name="Source"><![CDATA[local typeof = game and typeof or require "../test/mock".typeof :: never
+              <string name="Source"><![CDATA[local typeof = game and typeof or require("../test/mock").typeof :: never
 
-local graph = require "./graph"
+local graph = require("./graph")
 local get_scope = graph.get_scope
 local push_cleanup = graph.push_cleanup
 
 local function helper(obj: any)
-    return
-        if typeof(obj) == "RBXScriptConnection" then function() obj:Disconnect() end
-        elseif type(obj) == "thread" then function() task.cancel(obj) end
-        elseif typeof(obj) == "Instance" then function() obj:Destroy() end
-        elseif obj.destroy then function() obj:destroy() end
-        elseif obj.disconnect then function() obj:disconnect() end
-        elseif obj.Destroy then function() obj:Destroy() end
-        elseif obj.Disconnect then function() obj:Disconnect() end
-        else error "cannot cleanup given object"
+	return if typeof(obj) == "RBXScriptConnection"
+		then function()
+			obj:Disconnect()
+		end
+		elseif type(obj) == "thread" then function()
+			task.cancel(obj)
+		end
+		elseif typeof(obj) == "Instance" then function()
+			obj:Destroy()
+		end
+		elseif obj.destroy then function()
+			obj:destroy()
+		end
+		elseif obj.disconnect then function()
+			obj:disconnect()
+		end
+		elseif obj.Destroy then function()
+			obj:Destroy()
+		end
+		elseif obj.Disconnect then function()
+			obj:Disconnect()
+		end
+		else error("cannot cleanup given object")
 end
 
 local function cleanup(value: unknown)
-    local scope = get_scope()
+	local scope = get_scope()
 
-    if not scope then
-        error "cannot cleanup outside a stable or reactive scope"
-    end; assert(scope)
+	if not scope then
+		error("cannot cleanup outside a stable or reactive scope")
+	end
+	assert(scope)
 
-    if type(value) == "function" then
-        push_cleanup(scope, value :: () -> ())
-    else
-        push_cleanup(scope, helper(value))
-    end
+	if type(value) == "function" then
+		push_cleanup(scope, value :: () -> ())
+	else
+		push_cleanup(scope, helper(value))
+	end
 end
 
 type Destroyable = { destroy: (any) -> () } | { Destroy: (any) -> () }
 type Disconnectable = { disconnect: (any) -> () } | { Disconnect: (any) -> () }
 
-return cleanup ::
-    ( (callback: () -> ()) -> () ) &
-    ( (thread: thread) -> () ) &
-    ( (instance: Destroyable) -> () ) &
-    ( (connection: Disconnectable) -> () ) &
-    ( (instance: Instance) -> () ) &
-    ( (connection: RBXScriptConnection) -> () )
-
+return cleanup :: ((callback: () -> ()) -> ()) & ((thread: thread) -> ()) & ((instance: Destroyable) -> ()) & ((connection: Disconnectable) -> ()) & ((instance: Instance) -> ()) & ((connection: RBXScriptConnection) -> ())
 ]]></string>
             </Properties>
           </Item>
           <Item class="ModuleScript" referent="49">
             <Properties>
               <string name="Name">context</string>
-              <string name="Source"><![CDATA[local graph = require "./graph"
+              <string name="Source"><![CDATA[local graph = require("./graph")
 type Node<T> = graph.Node<T>
 local create_node = graph.create_node
 local get_scope = graph.get_scope
@@ -13830,63 +13848,67 @@ local nil_symbol = newproxy()
 local count = 0
 
 local function context<T>(...: T): Context<T>
-    count += 1
-    local id = count
+	count += 1
+	local id = count
 
-    local has_default = select("#", ...) > 0
-    local default_value = ...
+	local has_default = select("#", ...) > 0
+	local default_value = ...
 
-    return function<T>(...): any -- todo: fix type error
-        local scope: Node<unknown>? | false = get_scope()
+	return function<T>(...): any -- todo: fix type error
+		local scope: Node<unknown>? | false = get_scope()
 
-        if select("#", ...) == 0 then -- get
-            while scope do
-                local ctx = scope.context
-    
-                if not ctx then
-                    scope = scope.owner
-                    continue
-                end
+		if select("#", ...) == 0 then -- get
+			while scope do
+				local ctx = scope.context
 
-                local value = (ctx :: { unknown })[id]
+				if not ctx then
+					scope = scope.owner
+					continue
+				end
 
-                if value == nil then
-                    scope = scope.owner
-                    continue
-                end
-                
-                return (if value ~= nil_symbol then value else nil) :: T
-            end
+				local value = (ctx :: { unknown })[id]
 
-            if has_default ~= nil then
-                return default_value
-            else
-                error("attempt to get context when no context is set and no default context is set", 0)
-            end
-        else -- set
-            if not scope then return error("attempt to set context outside of a vide scope", 0) end
+				if value == nil then
+					scope = scope.owner
+					continue
+				end
 
-            local value, component = ...
-            
-            local new_scope = create_node(scope, false, false)
-            set_context(new_scope, id, if value == nil then nil_symbol else value)
+				return (if value ~= nil_symbol then value else nil) :: T
+			end
 
-            push_scope(new_scope)
+			if has_default ~= nil then
+				return default_value
+			else
+				error("attempt to get context when no context is set and no default context is set", 0)
+			end
+		else -- set
+			if not scope then
+				return error("attempt to set context outside of a vide scope", 0)
+			end
 
-            local function efn(err: string) return debug.traceback(err, 3) end
-            local ok, result = xpcall(component, efn)
+			local value, component = ...
 
-            pop_scope()
+			local new_scope = create_node(scope, false, false)
+			set_context(new_scope, id, if value == nil then nil_symbol else value)
 
-            if not ok then
-                error(`error while running context:\n\n{result}`, 0)
-            end
+			push_scope(new_scope)
 
-            return result
-        end
+			local function efn(err: string)
+				return debug.traceback(err, 3)
+			end
+			local ok, result = xpcall(component, efn)
 
-        return nil :: any
-    end
+			pop_scope()
+
+			if not ok then
+				error(`error while running context:\n\n{result}`, 0)
+			end
+
+			return result
+		end
+
+		return nil :: any
+	end
 end
 
 return context
@@ -13896,111 +13918,115 @@ return context
           <Item class="ModuleScript" referent="50">
             <Properties>
               <string name="Name">create</string>
-              <string name="Source"><![CDATA[local typeof = game and typeof or require "../test/mock".typeof :: never
-local Instance = game and Instance or require "../test/mock".Instance :: never
+              <string name="Source"><![CDATA[local typeof = game and typeof or require("../test/mock").typeof :: never
+local Instance = game and Instance or require("../test/mock").Instance :: never
 
-local defaults = require "./defaults"
-local apply = require "./apply"
-local flags = require "./flags"
+local apply = require("./apply")
+local defaults = require("./defaults")
+local flags = require("./flags")
 
 local function create_constructor_for_class(class: string): ({ [unknown]: unknown }) -> Instance
-    local function constructor(properties: { [unknown]: unknown }): Instance
-        local ok, instance: Instance = pcall(Instance.new, class :: any)
-        if not ok then error(`invalid class name {class}`, 0) end
+	local function constructor(properties: { [unknown]: unknown }): Instance
+		local ok, instance: Instance = pcall(Instance.new, class :: any)
+		if not ok then
+			error(`invalid class name {class}`, 0)
+		end
 
-        if flags.defaults then
-            local default: { [string]: unknown }? = defaults[class]
-            if default then
-                for i, v in default do
-                    (instance :: any)[i] = v
-                end
-            end
-        end
+		if flags.defaults then
+			local default: { [string]: unknown }? = defaults[class]
+			if default then
+				for i, v in default do
+					(instance :: any)[i] = v
+				end
+			end
+		end
 
-        return apply(instance, properties)
-    end
+		return apply(instance, properties)
+	end
 
-    return constructor
+	return constructor
 end
 
 local constructor_cache = {} :: { [string]: ({ [unknown]: unknown }) -> Instance }
 
 -- todo: remove support for different overloads
-local function create(class_or_instance: string|Instance, properties: { [unknown]: unknown }?): unknown
-    if type(class_or_instance) ~= "string" and typeof(class_or_instance) ~= "Instance" then
-        error("bad argument #1, expected string or instance, got " .. typeof(class_or_instance), 0)
-    end
+local function create(class_or_instance: string | Instance, properties: { [unknown]: unknown }?): unknown
+	if type(class_or_instance) ~= "string" and typeof(class_or_instance) ~= "Instance" then
+		error("bad argument #1, expected string or instance, got " .. typeof(class_or_instance), 0)
+	end
 
-    local constructor: ({ [unknown]: unknown }) -> Instance
-    if type(class_or_instance) == "string" then
-        constructor = constructor_cache[class_or_instance]
-        if not constructor then
-            constructor = create_constructor_for_class(class_or_instance)
-            constructor_cache[class_or_instance] = constructor
-        end
-    else
-        constructor = function(props)
-            local clone = assert(class_or_instance:Clone(), "attempt to clone a non-archivable instance")
-            return apply(clone, props)
-        end
-    end
+	local constructor: ({ [unknown]: unknown }) -> Instance
+	if type(class_or_instance) == "string" then
+		constructor = constructor_cache[class_or_instance]
+		if not constructor then
+			constructor = create_constructor_for_class(class_or_instance)
+			constructor_cache[class_or_instance] = constructor
+		end
+	else
+		constructor = function(props)
+			local clone = assert(class_or_instance:Clone(), "attempt to clone a non-archivable instance")
+			return apply(clone, props)
+		end
+	end
 
-    return if properties
-        then constructor(properties)
-        else constructor
+	return if properties then constructor(properties) else constructor
 end
 
 type Instances = {
-    Folder: Folder,
-    BillboardGui: BillboardGui,
-    CanvasGroup: CanvasGroup,
-    Frame: Frame,
-    ImageButton: ImageButton,
-    ImageLabel: ImageLabel,
-    ScreenGui: ScreenGui,
-    ScrollingFrame: ScrollingFrame,
-    SurfaceGui: SurfaceGui,
-    TextBox: TextBox,
-    TextButton: TextButton,
-    TextLabel: TextLabel,
-    UIAspectRatioConstraint: UIAspectRatioConstraint,
-    UICorner: UICorner,
-    UIGradient: UIGradient,
-    UIGridLayout: UIGridLayout,
-    UIListLayout: UIListLayout,
-    Camera: Camera,
-    WorldModel: WorldModel,
+	Folder: Folder,
+	BillboardGui: BillboardGui,
+	CanvasGroup: CanvasGroup,
+	Frame: Frame,
+	ImageButton: ImageButton,
+	ImageLabel: ImageLabel,
+	ScreenGui: ScreenGui,
+	ScrollingFrame: ScrollingFrame,
+	SurfaceGui: SurfaceGui,
+	TextBox: TextBox,
+	TextButton: TextButton,
+	TextLabel: TextLabel,
+	UIAspectRatioConstraint: UIAspectRatioConstraint,
+	UICorner: UICorner,
+	UIGradient: UIGradient,
+	UIGridLayout: UIGridLayout,
+	UIListLayout: UIListLayout,
+	Camera: Camera,
+	WorldModel: WorldModel,
 }
 
 type function Properties(instance: type?)
-    local properties = types.newtable()
+	local properties = types.newtable()
 
-    while instance do
-        for i, v in instance:properties() do
-            local connector = v.read and v.read.tag == "table" and v.read:readproperty(types.singleton("Connect"))
-            if connector then
-                local params = connector:parameters().head
-                if not params then continue end
-                local listener = params[2]
-                if not listener then continue end
-                properties:setproperty(i, types.optional(listener))
-            elseif v.write then
-                properties:setproperty(i, types.optional(types.unionof(
-                    v.write,
-                    types.newfunction({}, { head = { v.write } })
-                )))
-            end
-        end
+	while instance do
+		for i, v in instance:properties() do
+			local connector = v.read and v.read.tag == "table" and v.read:readproperty(types.singleton("Connect"))
+			if connector then
+				local params = connector:parameters().head
+				if not params then
+					continue
+				end
+				local listener = params[2]
+				if not listener then
+					continue
+				end
+				properties:setproperty(i, types.optional(listener))
+			elseif v.write then
+				properties:setproperty(
+					i,
+					types.optional(types.unionof(v.write, types.newfunction({}, { head = { v.write } })))
+				)
+			end
+		end
 
-        instance = instance:readparent()
-    end
+		instance = instance:readparent()
+	end
 
-    properties:setindexer(types.number, types.any)
+	properties:setindexer(types.number, types.any)
 
-    return properties
+	return properties
 end
 
-type Create = <Name>(Name|keyof<Instances>|"") -> (Properties<index<Instances, Name>>) -> index<Instances, Name>
+type Create = <Name>(Name | keyof<Instances> | "") -> (Properties<index<Instances, Name>>) -> index<Instances, Name>
 
 return create :: Create
 ]]></string>
@@ -14009,140 +14035,140 @@ return create :: Create
           <Item class="ModuleScript" referent="51">
             <Properties>
               <string name="Name">defaults</string>
-              <string name="Source"><![CDATA[local Enum = game and Enum or require "../test/mock".Enum :: never
-local Color3 = game and Color3 or require "../test/mock".Color3 :: never
+              <string name="Source"><![CDATA[local Enum = game and Enum or require("../test/mock").Enum :: never
+local Color3 = game and Color3 or require("../test/mock").Color3 :: never
 
 return {
-    Part = {
-        Material = Enum.Material.SmoothPlastic,
-        Size = vector.create(1, 1, 1),
-        Anchored = true
-    },
+	Part = {
+		Material = Enum.Material.SmoothPlastic,
+		Size = vector.create(1, 1, 1),
+		Anchored = true,
+	},
 
-    BillboardGui = {
-        ResetOnSpawn = false,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    },
+	BillboardGui = {
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	},
 
-    CanvasGroup = nil,
+	CanvasGroup = nil,
 
-    Frame = {
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderColor3 = Color3.new(0, 0, 0),
-        BorderSizePixel = 0
-    },
+	Frame = {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderColor3 = Color3.new(0, 0, 0),
+		BorderSizePixel = 0,
+	},
 
-    ImageButton = {
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderColor3 = Color3.new(0, 0, 0),
-        BorderSizePixel = 0,
-        AutoButtonColor = false
-    },
+	ImageButton = {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderColor3 = Color3.new(0, 0, 0),
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+	},
 
-    ImageLabel = {
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderColor3 = Color3.new(0, 0, 0),
-        BorderSizePixel = 0,
-    },
+	ImageLabel = {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderColor3 = Color3.new(0, 0, 0),
+		BorderSizePixel = 0,
+	},
 
-    ScreenGui = {
-        ResetOnSpawn = false,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    },
+	ScreenGui = {
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	},
 
-    ScrollingFrame = {
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderColor3 = Color3.new(0, 0, 0),
-        BorderSizePixel = 0,
-        ScrollBarImageColor3 = Color3.new(0, 0, 0)
-    },
-    
-    SurfaceGui = {
-        ResetOnSpawn = false,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	ScrollingFrame = {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderColor3 = Color3.new(0, 0, 0),
+		BorderSizePixel = 0,
+		ScrollBarImageColor3 = Color3.new(0, 0, 0),
+	},
 
-        PixelsPerStud = 50,
-        SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
-    },
-    
-    TextBox = {
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderColor3 = Color3.new(0, 0, 0),
-        BorderSizePixel = 0,
-        ClearTextOnFocus = false,
-        Font = Enum.Font.SourceSans,
-        Text = "",
-        TextColor3 = Color3.new(0, 0, 0)
-    },
+	SurfaceGui = {
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 
-    TextButton = {
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderColor3 = Color3.new(0, 0, 0),
-        BorderSizePixel = 0,
-        AutoButtonColor = false,
-        Font = Enum.Font.SourceSans,
-        Text = "",
-        TextColor3 = Color3.new(0, 0, 0)
-    },
-    
-    TextLabel = {
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderColor3 = Color3.new(0, 0, 0),
-        BorderSizePixel = 0,
-        Font = Enum.Font.SourceSans,
-        Text = "",
-        TextColor3 = Color3.new(0, 0, 0)
-    },
-    
-    UIListLayout = {
-        SortOrder = Enum.SortOrder.LayoutOrder
-    },
-   
-    UIGridLayout = {
-        SortOrder = Enum.SortOrder.LayoutOrder
-    },
+		PixelsPerStud = 50,
+		SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud,
+	},
 
-    UITableLayout = {
-        SortOrder = Enum.SortOrder.LayoutOrder
-    },
+	TextBox = {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderColor3 = Color3.new(0, 0, 0),
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = Enum.Font.SourceSans,
+		Text = "",
+		TextColor3 = Color3.new(0, 0, 0),
+	},
 
-    UIPageLayout = {
-        SortOrder = Enum.SortOrder.LayoutOrder
-    },
-    
-    VideoFrame = {
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderColor3 = Color3.new(0, 0, 0),
-        BorderSizePixel = 0
-    },
-    
-    ViewportFrame = {
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderColor3 = Color3.new(0, 0, 0),
-        BorderSizePixel = 0
-    }
-} :: { [string]: { [string]: unknown} }
+	TextButton = {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderColor3 = Color3.new(0, 0, 0),
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Font = Enum.Font.SourceSans,
+		Text = "",
+		TextColor3 = Color3.new(0, 0, 0),
+	},
+
+	TextLabel = {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderColor3 = Color3.new(0, 0, 0),
+		BorderSizePixel = 0,
+		Font = Enum.Font.SourceSans,
+		Text = "",
+		TextColor3 = Color3.new(0, 0, 0),
+	},
+
+	UIListLayout = {
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	},
+
+	UIGridLayout = {
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	},
+
+	UITableLayout = {
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	},
+
+	UIPageLayout = {
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	},
+
+	VideoFrame = {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderColor3 = Color3.new(0, 0, 0),
+		BorderSizePixel = 0,
+	},
+
+	ViewportFrame = {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderColor3 = Color3.new(0, 0, 0),
+		BorderSizePixel = 0,
+	},
+} :: { [string]: { [string]: unknown } }
 ]]></string>
             </Properties>
           </Item>
           <Item class="ModuleScript" referent="52">
             <Properties>
               <string name="Name">derive</string>
-              <string name="Source"><![CDATA[local graph = require "./graph"
+              <string name="Source"><![CDATA[local graph = require("./graph")
 local create_node = graph.create_node
 local push_scope_as_child_of = graph.push_scope_as_child_of
 local assert_stable_scope = graph.assert_stable_scope
 local evaluate_node = graph.evaluate_node
 
 local function derive<T>(source: () -> T): () -> T
-    local node = create_node(assert_stable_scope(), source, false :: any)
+	local node = create_node(assert_stable_scope(), source, false :: any)
 
-    evaluate_node(node)
+	evaluate_node(node)
 
-    return function()
-        push_scope_as_child_of(node)
-        return node.cache
-    end
+	return function()
+		push_scope_as_child_of(node)
+		return node.cache
+	end
 end
 
 return derive
@@ -14152,15 +14178,15 @@ return derive
           <Item class="ModuleScript" referent="53">
             <Properties>
               <string name="Name">effect</string>
-              <string name="Source"><![CDATA[local graph = require "./graph"
+              <string name="Source"><![CDATA[local graph = require("./graph")
 local create_node = graph.create_node
 local assert_stable_scope = graph.assert_stable_scope
 local evaluate_node = graph.evaluate_node
 
 local function effect<T>(callback: (T) -> T, initial_value: T)
-    local node = create_node(assert_stable_scope(), callback, initial_value)
+	local node = create_node(assert_stable_scope(), callback, initial_value)
 
-    evaluate_node(node)
+	evaluate_node(node)
 end
 
 return effect :: (<T>(callback: (T) -> T, initial_value: T) -> ()) & ((callback: () -> ()) -> ())
@@ -14171,16 +14197,16 @@ return effect :: (<T>(callback: (T) -> T, initial_value: T) -> ()) & ((callback:
             <Properties>
               <string name="Name">flags</string>
               <string name="Source"><![CDATA[local function inline_test(): string
-    return debug.info(1, "n")
+	return debug.info(1, "n")
 end
 
 local is_O2 = inline_test() ~= "inline_test"
 
 return {
-    strict = not is_O2,
-    defaults = true,
-    defer_nested_properties = true,
-    batch = false,
+	strict = not is_O2,
+	defaults = true,
+	defer_nested_properties = true,
+	batch = false,
 }
 ]]></string>
             </Properties>
@@ -14188,334 +14214,341 @@ return {
           <Item class="ModuleScript" referent="55">
             <Properties>
               <string name="Name">graph</string>
-              <string name="Source"><![CDATA[local flags = require "./flags"
+              <string name="Source"><![CDATA[local flags = require("./flags")
 
 export type SourceNode<T> = {
-    cache: T,
-    [number]: Node<T>
+	cache: T,
+	[number]: Node<T>,
 }
 
-export type Node<T> =  {
-    cache: T,
-    effect:  ((T) -> T) | false,
-    cleanups: { () -> () } | false,
+export type Node<T> = {
+	cache: T,
+	effect: ((T) -> T) | false,
+	cleanups: { () -> () } | false,
 
-    context: { [number]: unknown } | false,
+	context: { [number]: unknown } | false,
 
-    owned: { Node<T> } | false,
-    owner: Node<T> | false,
+	owned: { Node<T> } | false,
+	owner: Node<T> | false,
 
-    parents: { SourceNode<T> },
-    [number]: Node<T> -- children
+	parents: { SourceNode<T> },
+	[number]: Node<T>, -- children
 }
 
 local scopes = { n = 0 } :: { [number]: Node<any>, n: number } -- scopes stack
 
 local function efn(err: string)
-    local trace = debug.traceback(err, 2)
+	local trace = debug.traceback(err, 2)
 
-    if string.find(err, "^effect error stacktrace") then -- if effect error is nested
-        trace = string.gsub("    " .. trace, "\n", function() -- indent entire error
-            return "\n    "
-        end)
-    end
+	if string.find(err, "^effect error stacktrace") then -- if effect error is nested
+		trace = string.gsub("    " .. trace, "\n", function() -- indent entire error
+			return "\n    "
+		end)
+	end
 
-    trace ..= "\nsource update stacktrace:"
-return trace
+	trace ..= "\nsource update stacktrace:"
+	return trace
 end
 
-local function ycall<T, U>(fn: (T) -> U, arg: T): (boolean, string|U)
+local function ycall<T, U>(fn: (T) -> U, arg: T): (boolean, string | U)
+	local thread = coroutine.create(xpcall)
+	--local function efn(err: string) return debug.traceback(err, 3) end
+	local resume_ok, run_ok, result = coroutine.resume(thread, fn, efn, arg)
 
-    local thread = coroutine.create(xpcall)
-    --local function efn(err: string) return debug.traceback(err, 3) end
-    local resume_ok, run_ok, result = coroutine.resume(thread, fn, efn, arg)
+	assert(resume_ok)
 
-    assert(resume_ok)
-        
-    if coroutine.status(thread) ~= "dead" then
-        return false, debug.traceback(thread, "attempt to yield in reactive scope")
-    end
+	if coroutine.status(thread) ~= "dead" then
+		return false, debug.traceback(thread, "attempt to yield in reactive scope")
+	end
 
-    return run_ok, result
+	return run_ok, result
 end
 
 local function get_scope(): Node<unknown>?
-    return scopes[scopes.n]
+	return scopes[scopes.n]
 end
 
 local function assert_stable_scope(): Node<unknown>
-    local scope = get_scope()
+	local scope = get_scope()
 
-    if not scope then
-        local caller_name = debug.info(2, "n")
-        return error(`cannot use {caller_name}() outside a stable or reactive scope`, 0)
-    elseif scope.effect then
-        error("cannot create a new reactive scope inside another reactive scope", 0)
-    end
+	if not scope then
+		local caller_name = debug.info(2, "n")
+		return error(`cannot use {caller_name}() outside a stable or reactive scope`, 0)
+	elseif scope.effect then
+		error("cannot create a new reactive scope inside another reactive scope", 0)
+	end
 
-    return scope
+	return scope
 end
 
 local function push_child<T>(parent: SourceNode<any>, child: Node<any>)
-    table.insert(parent, child)
-    table.insert(child.parents, parent)
+	table.insert(parent, child)
+	table.insert(child.parents, parent)
 end
 
 local function push_scope<T>(node: Node<T>)
-    local n = scopes.n + 1
-    scopes.n = n
-    scopes[n] = node
+	local n = scopes.n + 1
+	scopes.n = n
+	scopes[n] = node
 end
 
 local function pop_scope()
-    local n = scopes.n
-    scopes.n = n - 1
-    scopes[n] = nil
+	local n = scopes.n
+	scopes.n = n - 1
+	scopes[n] = nil
 end
 
 local function push_cleanup<T>(node: Node<T>, cleanup: () -> ())
-    if node.cleanups then
-        table.insert(node.cleanups, cleanup)
-    else
-        node.cleanups = { cleanup }
-    end
+	if node.cleanups then
+		table.insert(node.cleanups, cleanup)
+	else
+		node.cleanups = { cleanup }
+	end
 end
 
 local function flush_cleanups<T>(node: Node<T>)
-    if node.cleanups then
-        for _, fn in node.cleanups do
-            local ok, err: string? = xpcall(fn, debug.traceback)
-            if not ok then error(`cleanup error: {err}`, 0) end
-        end
+	if node.cleanups then
+		for _, fn in node.cleanups do
+			local ok, err: string? = xpcall(fn, debug.traceback)
+			if not ok then
+				error(`cleanup error: {err}`, 0)
+			end
+		end
 
-        table.clear(node.cleanups)
-    end
+		table.clear(node.cleanups)
+	end
 end
 
 local function find_and_swap_pop<T>(t: { T }, v: T)
-    local i = table.find(t, v) :: number
-    local n = #t
-    t[i] = t[n]
-    t[n] = nil
+	local i = table.find(t, v) :: number
+	local n = #t
+	t[i] = t[n]
+	t[n] = nil
 end
 
 local function unparent<T>(node: Node<T>)
-    local parents = node.parents
+	local parents = node.parents
 
-    for i, parent in parents do
-        find_and_swap_pop(parent, node)
-        parents[i] = nil
-    end
+	for i, parent in parents do
+		find_and_swap_pop(parent, node)
+		parents[i] = nil
+	end
 end
 
 local function destroy<T>(node: Node<T>)
-    if flags.strict and table.find(scopes, node) then
-        error("attempt to destroy an active scope", 0)
-    end
+	if flags.strict and table.find(scopes, node) then
+		error("attempt to destroy an active scope", 0)
+	end
 
-    flush_cleanups(node)
-    unparent(node)
-    
-    if node.owner then
-        find_and_swap_pop(node.owner.owned :: { Node<T> }, node)
-        node.owner = false
-    end
+	flush_cleanups(node)
+	unparent(node)
 
-    if node.owned then
-        local owned = node.owned
-        while owned[1] do destroy(owned[1]) end
-    end
+	if node.owner then
+		find_and_swap_pop(node.owner.owned :: { Node<T> }, node)
+		node.owner = false
+	end
+
+	if node.owned then
+		local owned = node.owned
+		while owned[1] do
+			destroy(owned[1])
+		end
+	end
 end
 
 local function destroy_owned<T>(node: Node<T>)
-    if node.owned then
-        local owned = node.owned
-        while owned[1] do destroy(owned[1]) end
-    end
+	if node.owned then
+		local owned = node.owned
+		while owned[1] do
+			destroy(owned[1])
+		end
+	end
 end
 
 local update_queue = { n = 0 } :: { n: number, [number]: Node<any> }
 
 local function evaluate_node<T>(node: Node<T>)
-    if flags.strict then
-        if table.find(scopes, node) then
-            error("a scope, that should rerun due to the update of a source, is already active", 0)
-        end
+	if flags.strict then
+		if table.find(scopes, node) then
+			error("a scope, that should rerun due to the update of a source, is already active", 0)
+		end
 
-        local initial_value = node.cache
+		local initial_value = node.cache
 
-        for i = 1, 2 do
-            local cur_value = node.cache
+		for i = 1, 2 do
+			local cur_value = node.cache
 
-            flush_cleanups(node)
-            destroy_owned(node)
-    
-            push_scope(node)
-            local ok, new_value = ycall(node.effect :: (T) -> T, cur_value)
-            pop_scope()
-            
-            if not ok then
-                table.clear(update_queue)
-                update_queue.n = 0
-                error(`effect error stacktrace\n{new_value :: string}`, 0)
-            end
+			flush_cleanups(node)
+			destroy_owned(node)
 
-            node.cache = new_value :: T
-        end
+			push_scope(node)
+			local ok, new_value = ycall(node.effect :: (T) -> T, cur_value)
+			pop_scope()
 
-        return initial_value ~= node.cache
-    else
-        local cur_value = node.cache
+			if not ok then
+				table.clear(update_queue)
+				update_queue.n = 0
+				error(`effect error stacktrace\n{new_value :: string}`, 0)
+			end
 
-        flush_cleanups(node)
-        destroy_owned(node)
+			node.cache = new_value :: T
+		end
 
-        push_scope(node)
-        local ok, new_value = pcall(node.effect :: (T) -> T, node.cache)
-        pop_scope()
+		return initial_value ~= node.cache
+	else
+		local cur_value = node.cache
 
-        if not ok then
-            table.clear(update_queue)
-            update_queue.n = 0
-            error(`effect error:\n{new_value}\n`, 0)
-        end
-    
-        node.cache = new_value
-        return cur_value ~= new_value
-    end
+		flush_cleanups(node)
+		destroy_owned(node)
+
+		push_scope(node)
+		local ok, new_value = pcall(node.effect :: (T) -> T, node.cache)
+		pop_scope()
+
+		if not ok then
+			table.clear(update_queue)
+			update_queue.n = 0
+			error(`effect error:\n{new_value}\n`, 0)
+		end
+
+		node.cache = new_value
+		return cur_value ~= new_value
+	end
 end
 
 local function queue_children_for_update<T>(node: SourceNode<T>)
-    local i = update_queue.n
-    while node[1] do
-        i += 1
-        update_queue[i] = node[1]
-        unparent(node[1])
-    end
-    update_queue.n = i
+	local i = update_queue.n
+	while node[1] do
+		i += 1
+		update_queue[i] = node[1]
+		unparent(node[1])
+	end
+	update_queue.n = i
 end
 
 local function get_update_queue_length()
-    return update_queue.n
+	return update_queue.n
 end
 
 local function flush_update_queue(from: number)
-    local i = from + 1
-    while i <= update_queue.n do
-        local node = update_queue[i]
-        --assert(node.effect)
+	local i = from + 1
+	while i <= update_queue.n do
+		local node = update_queue[i]
+		--assert(node.effect)
 
-        if node.owner and evaluate_node(node) then
-            queue_children_for_update(node)
-        end
+		if node.owner and evaluate_node(node) then
+			queue_children_for_update(node)
+		end
 
-        update_queue[i] = false :: any
-        i += 1
-    end
-    
-    update_queue.n = from
+		update_queue[i] = false :: any
+		i += 1
+	end
+
+	update_queue.n = from
 end
 
 local function update_descendants<T>(root: SourceNode<T>)
-    local n0 = update_queue.n
-    queue_children_for_update(root)
+	local n0 = update_queue.n
+	queue_children_for_update(root)
 
-    if flags.batch then return end
+	if flags.batch then
+		return
+	end
 
-    local i = n0 + 1
-    while i <= update_queue.n do
-        local node = update_queue[i]
-        --assert(node.effect)
+	local i = n0 + 1
+	while i <= update_queue.n do
+		local node = update_queue[i]
+		--assert(node.effect)
 
-        -- check if node is still owned in case destroyed after queued
-        if node.owner and evaluate_node(node) then
-            queue_children_for_update(node)
-        end
+		-- check if node is still owned in case destroyed after queued
+		if node.owner and evaluate_node(node) then
+			queue_children_for_update(node)
+		end
 
-        update_queue[i] = false :: any -- false instead of nil to avoid sparse
-        i += 1
-    end
+		update_queue[i] = false :: any -- false instead of nil to avoid sparse
+		i += 1
+	end
 
-    update_queue.n = n0
+	update_queue.n = n0
 end
 
 local function push_scope_as_child_of<T>(node: SourceNode<T>)
-    local scope = get_scope()
-    if scope and scope.effect then -- do not track nodes with no effect
-        push_child(node, scope)
-    end
+	local scope = get_scope()
+	if scope and scope.effect then -- do not track nodes with no effect
+		push_child(node, scope)
+	end
 end
 
 local function create_node<T>(owner: false | Node<any>, effect: false | (T) -> T, value: T): Node<T>
-    local node: Node<T> = {
-        cache = value,
-        effect = effect,
-        cleanups = false,
+	local node: Node<T> = {
+		cache = value,
+		effect = effect,
+		cleanups = false,
 
-        context = false,
+		context = false,
 
-        owner = owner,
-        owned = false,
+		owner = owner,
+		owned = false,
 
-        parents = {},
-    }
+		parents = {},
+	}
 
-    if owner then
-        if owner.owned then
-            table.insert(owner.owned, node)
-        else
-            owner.owned = { node }
-        end
-    end
+	if owner then
+		if owner.owned then
+			table.insert(owner.owned, node)
+		else
+			owner.owned = { node }
+		end
+	end
 
-    return node
+	return node
 end
 
 local function create_source_node<T>(value: T): SourceNode<T>
-    return { cache = value }
+	return { cache = value }
 end
 
 local function get_children<T>(node: Node<T>): { Node<unknown> }
-    return { unpack(node) } :: { Node<any> }
+	return { unpack(node) } :: { Node<any> }
 end
 
 local function set_context<T>(node: Node<T>, key: number, value: unknown)
-    if node.context then
-        node.context[key] = value
-    else
-        node.context = { [key] = value }
-    end
+	if node.context then
+		node.context[key] = value
+	else
+		node.context = { [key] = value }
+	end
 end
 
-return table.freeze {
-    push_scope = push_scope,
-    pop_scope = pop_scope,
-    evaluate_node = evaluate_node,
-    get_scope = get_scope,
-    assert_stable_scope = assert_stable_scope,
-    push_cleanup = push_cleanup,
-    destroy = destroy,
-    flush_cleanups = flush_cleanups,
-    push_scope_as_child_of = push_scope_as_child_of,
-    update_descendants = update_descendants,
-    push_child = push_child,
-    create_node = create_node,
-    create_source_node = create_source_node,
-    get_children = get_children,
-    flush_update_queue = flush_update_queue,
-    get_update_queue_length = get_update_queue_length,
-    set_context = set_context,
-    scopes = scopes,
+return table.freeze({
+	push_scope = push_scope,
+	pop_scope = pop_scope,
+	evaluate_node = evaluate_node,
+	get_scope = get_scope,
+	assert_stable_scope = assert_stable_scope,
+	push_cleanup = push_cleanup,
+	destroy = destroy,
+	flush_cleanups = flush_cleanups,
+	push_scope_as_child_of = push_scope_as_child_of,
+	update_descendants = update_descendants,
+	push_child = push_child,
+	create_node = create_node,
+	create_source_node = create_source_node,
+	get_children = get_children,
+	flush_update_queue = flush_update_queue,
+	get_update_queue_length = get_update_queue_length,
+	set_context = set_context,
+	scopes = scopes,
 
-    q = update_queue
-}
+	q = update_queue,
+})
 ]]></string>
             </Properties>
           </Item>
           <Item class="ModuleScript" referent="56">
             <Properties>
               <string name="Name">implicit_effect</string>
-              <string name="Source"><![CDATA[local graph = require "./graph"
+              <string name="Source"><![CDATA[local graph = require("./graph")
 type Node<T> = graph.Node<T>
 local create_node = graph.create_node
 local assert_stable_scope = graph.assert_stable_scope
@@ -14524,121 +14557,123 @@ local evaluate_node = graph.evaluate_node
 local push_cleanup = graph.push_cleanup
 
 local function update_property_effect(p: {
-    instance: Instance,
-    property: string,
-    source: () -> unknown  
+	instance: Instance,
+	property: string,
+	source: () -> unknown,
 })
-    (p.instance :: any)[p.property] = p.source()
-    return p
+	(p.instance :: any)[p.property] = p.source()
+	return p
 end
 
 local function update_parent_effect(p: {
-    instance: Instance,
-    source: () -> Instance
+	instance: Instance,
+	source: () -> Instance,
 })
-    p.instance.Parent = p.source()
-    return p
+	p.instance.Parent = p.source()
+	return p
 end
 
 -- todo: investigate if "count" method used in indexes() and values() can improve performance here
 local function update_children_effect(p: {
-    instance: Instance,
-    cur_children_set: { [Instance]: true },
-    new_children_set: { [Instance]: true },
-    source: () -> Instance | { Instance }
+	instance: Instance,
+	cur_children_set: { [Instance]: true },
+	new_children_set: { [Instance]: true },
+	source: () -> Instance | { Instance },
 })
-    local cur_children_set: { [Instance]: true } = p.cur_children_set -- cache of all children parented before update
-    local new_children_set: { [Instance]: true } = p.new_children_set -- cache of all children parented after update
+	local cur_children_set: { [Instance]: true } = p.cur_children_set -- cache of all children parented before update
+	local new_children_set: { [Instance]: true } = p.new_children_set -- cache of all children parented after update
 
-    local new_children = p.source() -- all (and only) children that should be parented after this update
-    
-    local function process_child(child: Instance | { Instance })
-        if type(child) == "userdata" then
-            if new_children_set[child] then return end -- stops redundant reparenting
+	local new_children = p.source() -- all (and only) children that should be parented after this update
 
-            new_children_set[child] = true -- record child set from this update
-            
-            if not cur_children_set[child] then
-                child.Parent = p.instance -- if child wasn't already parented then parent it
-            else 
-                cur_children_set[child] = nil -- remove child from cache if it was already in cache
-            end  
-        elseif type(child) == "table" then
-            for _, child in child do
-                process_child(child)
-            end
-        elseif type(child) == "function" then
-            local node = create_node(assert(get_scope()), update_children_effect, {
-                instance = p.instance,
-                cur_children_set = {},
-                new_children_set = {},
-                source = child   
-            })
-    
-            evaluate_node(node)
+	local function process_child(child: Instance | { Instance })
+		if type(child) == "userdata" then
+			if new_children_set[child] then
+				return
+			end -- stops redundant reparenting
 
-            push_cleanup(assert(get_scope()), function()
-                for child in node.cache.cur_children_set do
-                    child.Parent = nil
-                end
-            end)
-        end
-    end
+			new_children_set[child] = true -- record child set from this update
 
-    process_child(new_children)
+			if not cur_children_set[child] then
+				child.Parent = p.instance -- if child wasn't already parented then parent it
+			else
+				cur_children_set[child] = nil -- remove child from cache if it was already in cache
+			end
+		elseif type(child) == "table" then
+			for _, child in child do
+				process_child(child)
+			end
+		elseif type(child) == "function" then
+			local node = create_node(assert(get_scope()), update_children_effect, {
+				instance = p.instance,
+				cur_children_set = {},
+				new_children_set = {},
+				source = child,
+			})
 
-    for child in cur_children_set do
-        child.Parent = nil -- unparent all children that weren't in the new children set
-    end
+			evaluate_node(node)
 
-    table.clear(cur_children_set) -- clear cache, preserve capacity
-    p.cur_children_set, p.new_children_set = new_children_set, cur_children_set
+			push_cleanup(assert(get_scope()), function()
+				for child in node.cache.cur_children_set do
+					child.Parent = nil
+				end
+			end)
+		end
+	end
 
-    return p
+	process_child(new_children)
+
+	for child in cur_children_set do
+		child.Parent = nil -- unparent all children that weren't in the new children set
+	end
+
+	table.clear(cur_children_set) -- clear cache, preserve capacity
+	p.cur_children_set, p.new_children_set = new_children_set, cur_children_set
+
+	return p
 end
 
 return {
-    property = function(instance, property, source)
-        local node = create_node(assert_stable_scope(), update_property_effect, {
-            instance = instance,
-            property = property,
-            source = source
-        })
+	property = function(instance, property, source)
+		local node = create_node(assert_stable_scope(), update_property_effect, {
+			instance = instance,
+			property = property,
+			source = source,
+		})
 
-        evaluate_node(node)
+		evaluate_node(node)
 
-        return node
-    end,
+		return node
+	end,
 
-    parent = function(instance, parent)
-        local node = create_node(assert_stable_scope(), update_parent_effect, {
-            instance = instance,
-            source = parent
-        })
+	parent = function(instance, parent)
+		local node = create_node(assert_stable_scope(), update_parent_effect, {
+			instance = instance,
+			source = parent,
+		})
 
-        evaluate_node(node)
-        
-        return node
-    end,
+		evaluate_node(node)
 
-    children = function(instance, children)
-        local node = create_node(assert_stable_scope(), update_children_effect, {
-            instance = instance,
-            cur_children_set = {},
-            new_children_set = {},
-            source = children
-        })
+		return node
+	end,
 
-        evaluate_node(node)
+	children = function(instance, children)
+		local node = create_node(assert_stable_scope(), update_children_effect, {
+			instance = instance,
+			cur_children_set = {},
+			new_children_set = {},
+			source = children,
+		})
 
-        push_cleanup(assert_stable_scope(), function()
-            for child in node.cache.cur_children_set do
-                child.Parent = nil
-            end
-        end)
+		evaluate_node(node)
 
-        return node
-    end
+		push_cleanup(assert_stable_scope(), function()
+			for child in node.cache.cur_children_set do
+				child.Parent = nil
+			end
+		end)
+
+		return node
+	end,
 }
 ]]></string>
             </Properties>
@@ -14646,124 +14681,124 @@ return {
           <Item class="ModuleScript" referent="57">
             <Properties>
               <string name="Name">indexes</string>
-              <string name="Source"><![CDATA[local flags = require "./flags"
-local branch = require "./branch"
-local source = require "./source"
-local effect = require "./effect"
-local timeout = require "./timeout" ()
+              <string name="Source"><![CDATA[local branch = require("./branch")
+local effect = require("./effect")
+local flags = require("./flags")
+local source = require("./source")
+local timeout = require("./timeout")()
 
 type Array<T> = { T }
 type Map<K, V> = { [K]: V }
 type Source<T> = () -> T
 
 local function indexes<K, V, Obj>(
-    input: Source<Map<K, V>>,
-    component: (Source<V>, K, Source<boolean>) -> (Obj, ...number)
+	input: Source<Map<K, V>>,
+	component: (Source<V>, K, Source<boolean>) -> (Obj, ...number)
 ): Source<Array<Obj>>
-    local update_count = 0
-    local scopes = {} :: Map<K, {
-        destroy: () -> (),
-        object: Obj,
-        value: V?,
-        value_source: (V?) -> V,
-        count: number,
-        delay: number,
-        present: (boolean?) -> boolean,
-        timeout: { cancel: boolean }?,
-    }>
+	local update_count = 0
+	local scopes = {} :: Map<K, {
+		destroy: () -> (),
+		object: Obj,
+		value: V?,
+		value_source: (V?) -> V,
+		count: number,
+		delay: number,
+		present: (boolean?) -> boolean,
+		timeout: { cancel: boolean }?,
+	}>
 
-    local output = source({} :: Array<Obj>)
-    local function update_output()
-        local objects = table.create(4)
+	local output = source({} :: Array<Obj>)
+	local function update_output()
+		local objects = table.create(4)
 
-        for _, scope in scopes do
-            table.insert(objects, scope.object)
-        end
+		for _, scope in scopes do
+			table.insert(objects, scope.object)
+		end
 
-        output(objects)
-    end
+		output(objects)
+	end
 
-    effect(function()
-        local data = input()
+	effect(function()
+		local data = input()
 
-        local count = update_count
-        update_count += 1
+		local count = update_count
+		update_count += 1
 
-        local children_need_update = false -- set to true if a scope is created or destroyed
+		local children_need_update = false -- set to true if a scope is created or destroyed
 
-        -- create or update scopes
-        for i, v in data do
-            local scope = scopes[i]
+		-- create or update scopes
+		for i, v in data do
+			local scope = scopes[i]
 
-            if scope == nil then -- create new scope and create component
-                local value_source = source(v)
-                local present = source(false)
+			if scope == nil then -- create new scope and create component
+				local value_source = source(v)
+				local present = source(false)
 
-                local delay = nil :: number?
-                local destroy, object = branch(function()
-                    local object, t = component(value_source, i, present)
-                    delay = t
-                    return object
-                end)
+				local delay = nil :: number?
+				local destroy, object = branch(function()
+					local object, t = component(value_source, i, present)
+					delay = t
+					return object
+				end)
 
-                present(true)
-                
-                children_need_update = true
+				present(true)
 
-                scopes[i] = {
-                    destroy = destroy,
-                    object = object,
-                    value = v,
-                    value_source = value_source,
-                    count = count,
-                    delay = delay or 0,
-                    present = present,
-                    timeout = nil,
-                }
-            else -- update scope
-                scope.count = count
+				children_need_update = true
 
-                if scope.value ~= v then
-                    if scope.timeout then -- index is in input table again; cancel destruction
-                        scope.timeout.cancel = true
-                        scope.timeout = nil
-                        scope.present(true)
-                    end
-                    
-                    scope.value = v
-                    scope.value_source(v)
-                end
-            end
-        end
+				scopes[i] = {
+					destroy = destroy,
+					object = object,
+					value = v,
+					value_source = value_source,
+					count = count,
+					delay = delay or 0,
+					present = present,
+					timeout = nil,
+				}
+			else -- update scope
+				scope.count = count
 
-        -- destroy scopes
-        for i, scope in scopes do
-            if scope.count < count then -- if count is not latest then index is no longer in the input table
-                scope.present(false)
+				if scope.value ~= v then
+					if scope.timeout then -- index is in input table again; cancel destruction
+						scope.timeout.cancel = true
+						scope.timeout = nil
+						scope.present(true)
+					end
 
-                if scope.delay == 0 then
-                    scope.destroy()
-                    scopes[i] = nil
-                    children_need_update = true
-                else
-                    scope.value = nil -- set to nil for the `scope.value ~= v` check
-                    if scope.timeout == nil then
-                        scope.timeout = timeout(scope.delay, function() -- todo: possible redundant updates
-                            scope.destroy()
-                            scopes[i] = nil
-                            update_output()
-                        end)
-                    end
-                end
-            end
-        end
+					scope.value = v
+					scope.value_source(v)
+				end
+			end
+		end
 
-        if children_need_update then
-            update_output()
-        end
-    end)
+		-- destroy scopes
+		for i, scope in scopes do
+			if scope.count < count then -- if count is not latest then index is no longer in the input table
+				scope.present(false)
 
-    return output
+				if scope.delay == 0 then
+					scope.destroy()
+					scopes[i] = nil
+					children_need_update = true
+				else
+					scope.value = nil -- set to nil for the `scope.value ~= v` check
+					if scope.timeout == nil then
+						scope.timeout = timeout(scope.delay, function() -- todo: possible redundant updates
+							scope.destroy()
+							scopes[i] = nil
+							update_output()
+						end)
+					end
+				end
+			end
+		end
+
+		if children_need_update then
+			update_output()
+		end
+	end)
+
+	return output
 end
 
 return indexes
@@ -14775,28 +14810,28 @@ return indexes
               <string name="Name">lib</string>
               <string name="Source"><![CDATA[local version = { major = 0, minor = 4, patch = 0 }
 
-local root = require "./root"
-local branch = require "./branch"
-local mount = require "./mount"
-local create = require "./create"
-local apply = require "./apply"
-local source = require "./source"
-local effect = require "./effect"
-local derive = require "./derive"
-local cleanup = require "./cleanup"
-local untrack = require "./untrack"
-local read = require "./read"
-local batch = require "./batch"
-local context = require "./context"
-local switch = require "./switch"
-local show = require "./show"
-local indexes = require "./indexes"
-local values = require "./values"
-local spring, update_springs = require "./spring"()
-local action = require "./action"()
-local changed = require "./changed"
-local timeout, update_timeouts = require "./timeout"()
-local flags = require "./flags"
+local apply = require("./apply")
+local batch = require("./batch")
+local branch = require("./branch")
+local cleanup = require("./cleanup")
+local context = require("./context")
+local create = require("./create")
+local derive = require("./derive")
+local effect = require("./effect")
+local indexes = require("./indexes")
+local mount = require("./mount")
+local read = require("./read")
+local root = require("./root")
+local show = require("./show")
+local source = require("./source")
+local switch = require("./switch")
+local untrack = require("./untrack")
+local values = require("./values")
+local spring, update_springs = require("./spring")()
+local action = require("./action")()
+local changed = require("./changed")
+local timeout, update_timeouts = require("./timeout")()
+local flags = require("./flags")
 
 export type Source<T> = source.Source<T>
 export type source<T> = Source<T>
@@ -14804,92 +14839,104 @@ export type Context<T> = context.Context<T>
 export type context<T> = Context<T>
 
 local function step(dt: number)
-    if game then debug.profilebegin("VIDE STEP") end
+	if game then
+		debug.profilebegin("VIDE STEP")
+	end
 
-    if game then debug.profilebegin("VIDE SPRING") end
-    update_springs(dt)
-    if game then debug.profileend() end
+	if game then
+		debug.profilebegin("VIDE SPRING")
+	end
+	update_springs(dt)
+	if game then
+		debug.profileend()
+	end
 
-    if game then debug.profilebegin("VIDE SCHEDULER") end
-    update_timeouts(dt)
-    if game then debug.profileend() end
+	if game then
+		debug.profilebegin("VIDE SCHEDULER")
+	end
+	update_timeouts(dt)
+	if game then
+		debug.profileend()
+	end
 
-    if game then debug.profileend() end
+	if game then
+		debug.profileend()
+	end
 end
 
 local stepped = game and game:GetService("RunService").Heartbeat:Connect(function(dt: number)
-    task.defer(step, dt)
+	task.defer(step, dt)
 end)
 
 local vide = {
-    version = version,
+	version = version,
 
-    -- core
-    root = root,
-    --branch = branch,
-    mount = mount,
-    create = create,
-    source = source,
-    effect = effect,
-    derive = derive,
-    switch = switch,
-    show = show,
-    indexes = indexes,
-    values = values,
+	-- core
+	root = root,
+	--branch = branch,
+	mount = mount,
+	create = create,
+	source = source,
+	effect = effect,
+	derive = derive,
+	switch = switch,
+	show = show,
+	indexes = indexes,
+	values = values,
 
-    -- util
-    cleanup = cleanup,
-    untrack = untrack,
-    read = read,
-    batch = batch,
-    context = context,
+	-- util
+	cleanup = cleanup,
+	untrack = untrack,
+	read = read,
+	batch = batch,
+	context = context,
 
-    -- animations
-    spring = spring,
+	-- animations
+	spring = spring,
 
-    -- actions
-    action = action,
-    changed = changed,
+	-- actions
+	action = action,
+	changed = changed,
 
-    -- flags
-    strict = (nil :: any) :: boolean,
-    defaults = (nil :: any) :: boolean,
-    defer_nested_properties = (nil :: any) :: boolean,
+	-- flags
+	strict = (nil :: any) :: boolean,
+	defaults = (nil :: any) :: boolean,
+	defer_nested_properties = (nil :: any) :: boolean,
 
-    -- temporary
-    apply = function(instance: Instance)
-        return function(props: { [any]: any })
-            apply(instance, props)
-            return instance
-        end
-    end,
+	-- temporary
+	apply = function(instance: Instance)
+		return function(props: { [any]: any })
+			apply(instance, props)
+			return instance
+		end
+	end,
 
-    -- runtime
-    step = function(dt: number)
-        if stepped then
-            stepped:Disconnect()
-            stepped = nil
-        end
-        step(dt)
-    end
+	-- runtime
+	step = function(dt: number)
+		if stepped then
+			stepped:Disconnect()
+			stepped = nil
+		end
+		step(dt)
+	end,
 }
 
 setmetatable(vide :: any, {
-    __index = function(_, index: unknown): ()
-        if flags[index] == nil then
-            error(`{tostring(index)} is not a valid member of vide`, 0)
-        else
-            return flags[index]
-        end
-    end,
+	__index = function(_, index: unknown): ()
+		if flags[index] == nil then
+			error(`{tostring(index)} is not a valid member of vide`, 0)
+		else
+			return flags[index]
+		end
+	end,
 
-    __newindex = function(_, index: unknown, value: unknown)
-        if flags[index] == nil then
-            error(`{tostring(index)} is not a valid member of vide, 0`)
-        else
-            flags[index] = value
-        end
-    end
+	__newindex = function(_, index: unknown, value: unknown)
+		if flags[index] == nil then
+			error(`{tostring(index)} is not a valid member of vide, 0`)
+		else
+			flags[index] = value
+		end
+	end,
 })
 
 return vide
@@ -14899,14 +14946,16 @@ return vide
           <Item class="ModuleScript" referent="59">
             <Properties>
               <string name="Name">mount</string>
-              <string name="Source"><![CDATA[local root = require "./root"
-local apply = require "./apply"
+              <string name="Source"><![CDATA[local apply = require("./apply")
+local root = require("./root")
 
 local function mount<T>(component: () -> T, target: Instance?): () -> ()
-    return root(function()
-        local result = component()
-        if target then apply(target, { result }) end
-    end)
+	return root(function()
+		local result = component()
+		if target then
+			apply(target, { result })
+		end
+	end)
 end
 
 return mount :: (<T>(component: () -> T, target: Instance) -> () -> ()) & ((component: () -> ()) -> () -> ())
@@ -14917,7 +14966,7 @@ return mount :: (<T>(component: () -> T, target: Instance) -> () -> ()) & ((comp
             <Properties>
               <string name="Name">read</string>
               <string name="Source"><![CDATA[local function read<T>(value: T | () -> T): T
-    return if type(value) == "function" then value() else value
+	return if type(value) == "function" then value() else value
 end
 
 return read
@@ -14927,7 +14976,7 @@ return read
           <Item class="ModuleScript" referent="61">
             <Properties>
               <string name="Name">root</string>
-              <string name="Source"><![CDATA[local graph = require "./graph"
+              <string name="Source"><![CDATA[local graph = require("./graph")
 type Node<T> = graph.Node<T>
 local create_node = graph.create_node
 local push_scope = graph.push_scope
@@ -14937,28 +14986,30 @@ local destroy = graph.destroy
 local refs = {}
 
 local function root<T...>(fn: (destroy: () -> ()) -> T...): (() -> (), T...)
-    local node = create_node(false, false, false)
+	local node = create_node(false, false, false)
 
-    refs[node] = true -- prevent gc of root node
+	refs[node] = true -- prevent gc of root node
 
-    local destroy = function()
-        if not refs[node] then error "root already destroyed" end
-        refs[node] = nil
-        destroy(node)
-    end
+	local destroy = function()
+		if not refs[node] then
+			error("root already destroyed")
+		end
+		refs[node] = nil
+		destroy(node)
+	end
 
-    push_scope(node)
+	push_scope(node)
 
-    local result = { xpcall(fn, debug.traceback, destroy) }
+	local result = { xpcall(fn, debug.traceback, destroy) }
 
-    pop_scope()
+	pop_scope()
 
-    if not result[1] then
-        destroy()
-        error(`error while running root():\n\n{result[2]}`, 0)
-    end
+	if not result[1] then
+		destroy()
+		error(`error while running root():\n\n{result[2]}`, 0)
+	end
 
-    return destroy, unpack(result :: any, 2)
+	return destroy, unpack(result :: any, 2)
 end
 
 return root :: <T...>(fn: (destroy: () -> ()) -> T...) -> (() -> (), T...)
@@ -14968,39 +15019,39 @@ return root :: <T...>(fn: (destroy: () -> ()) -> T...) -> (() -> (), T...)
           <Item class="ModuleScript" referent="62">
             <Properties>
               <string name="Name">show</string>
-              <string name="Source"><![CDATA[local source = require "./source"
-local derive = require "./derive"
-local effect = require "./effect"
-local untrack = require "./untrack"
-local switch = require "./switch"
+              <string name="Source"><![CDATA[local derive = require("./derive")
+local effect = require("./effect")
+local source = require("./source")
+local switch = require("./switch")
+local untrack = require("./untrack")
 
 type Array<T> = { T }
 type Source<T> = () -> T
 
 local function show<T, Obj>(
-    input: Source<T?>,
-    component: (Source<T>, Source<boolean>) -> (Obj, ...number),
-    fallback: ((Source<boolean>) -> (Obj, ...number))?
+	input: Source<T?>,
+	component: (Source<T>, Source<boolean>) -> (Obj, ...number),
+	fallback: ((Source<boolean>) -> (Obj, ...number))?
 ): Source<nil | Obj | Array<Obj>>
-    local filtered_input = source()
+	local filtered_input = source()
 
-    effect(function()
-        local v = input() 
-        if v then
-            filtered_input(v)
-        end
-    end)
+	effect(function()
+		local v = input()
+		if v then
+			filtered_input(v)
+		end
+	end)
 
-    local input_is_truthy = derive(function()
-        return not not input()
-    end)
+	local input_is_truthy = derive(function()
+		return not not input()
+	end)
 
-    return switch(input_is_truthy) {
-        [true] = function(present)
-            return component(filtered_input, present)
-        end,
-        [false] = fallback
-    }
+	return switch(input_is_truthy)({
+		[true] = function(present)
+			return component(filtered_input, present)
+		end,
+		[false] = fallback,
+	})
 end
 
 return show
@@ -15010,7 +15061,7 @@ return show
           <Item class="ModuleScript" referent="63">
             <Properties>
               <string name="Name">source</string>
-              <string name="Source"><![CDATA[local graph = require "./graph"
+              <string name="Source"><![CDATA[local graph = require("./graph")
 type Node<T> = graph.Node<T>
 local create_source_node = graph.create_source_node
 local push_scope_as_child_of = graph.push_scope_as_child_of
@@ -15019,25 +15070,25 @@ local update_descendants = graph.update_descendants
 export type Source<T> = (() -> T) & ((value: T) -> T)
 
 local function source<T>(initial_value: T): Source<T>
-    local node = create_source_node(initial_value)
+	local node = create_source_node(initial_value)
 
-    local function update_source(...): T
-        if select("#", ...) == 0 then -- no args were given
-            push_scope_as_child_of(node)
-            return node.cache
-        end
+	local function update_source(...): T
+		if select("#", ...) == 0 then -- no args were given
+			push_scope_as_child_of(node)
+			return node.cache
+		end
 
-        local v = ... :: T
-        if node.cache == v and (type(v) ~= "table" or table.isfrozen(v)) then 
-            return v
-        end
+		local v = ... :: T
+		if node.cache == v and (type(v) ~= "table" or table.isfrozen(v)) then
+			return v
+		end
 
-        node.cache = v
-        update_descendants(node)
-        return v
-    end
+		node.cache = v
+		update_descendants(node)
+		return v
+	end
 
-    return update_source
+	return update_source
 end
 
 return source :: (<T>(initial_value: T) -> Source<T>) & (<T>() -> Source<T>)
@@ -15047,7 +15098,7 @@ return source :: (<T>(initial_value: T) -> Source<T>) & (<T>() -> Source<T>)
           <Item class="ModuleScript" referent="64">
             <Properties>
               <string name="Name">spring</string>
-              <string name="Source"><![CDATA[local graph = require "./graph"
+              <string name="Source"><![CDATA[local graph = require("./graph")
 type Node<T> = graph.Node<T>
 type SourceNode<T> = graph.SourceNode<T>
 local create_node = graph.create_node
@@ -15071,107 +15122,111 @@ Unsupported datatypes:
 ]]
 
 type SpringState<T> = {
-    k: number, -- spring constant
-    c: number, -- damping coeff
+	k: number, -- spring constant
+	c: number, -- damping coeff
 
-    x0_123: vector, x0_456: vector, -- initial position
-    x_123: vector, x_456: vector, -- current position
-    x1_123: vector, x1_456: vector, -- target position
-    v_123: vector, v_456: vector, -- current velocity
+	x0_123: vector,
+	x0_456: vector, -- initial position
+	x_123: vector,
+	x_456: vector, -- current position
+	x1_123: vector,
+	x1_456: vector, -- target position
+	v_123: vector,
+	v_456: vector, -- current velocity
 
-    source_value: T -- current value of spring input source
+	source_value: T, -- current value of spring input source
 }
 
 type SpringSettings<T> = ({
-    position: T?,
-    velocity: T?,
-    impulse: T?
+	position: T?,
+	velocity: T?,
+	impulse: T?,
 }) -> ()
 
 type TypeToVec6<T> = (T) -> (vector, vector)
 type Vec6ToType<T> = (vector, vector) -> T
 
 local type_to_vec6 = {
-    number = function(v)
-        return vector.create(v, 0, 0), vector.zero
-    end :: TypeToVec6<number>,
+	number = function(v)
+		return vector.create(v, 0, 0), vector.zero
+	end :: TypeToVec6<number>,
 
-    CFrame = function(v)
-        return v.Position, vector.create(v:ToEulerAnglesXYZ())
-    end :: TypeToVec6<CFrame>,
+	CFrame = function(v)
+		return v.Position, vector.create(v:ToEulerAnglesXYZ())
+	end :: TypeToVec6<CFrame>,
 
-    Color3 = function(v)
-        -- todo: hsv, oklab?
-        return vector.create(v.R, v.G, v.B), vector.zero
-    end :: TypeToVec6<Color3>,
+	Color3 = function(v)
+		-- todo: hsv, oklab?
+		return vector.create(v.R, v.G, v.B), vector.zero
+	end :: TypeToVec6<Color3>,
 
-    UDim = function(v)
-        return vector.create(v.Scale, v.Offset, 0), vector.zero
-    end :: TypeToVec6<UDim>,
-    
-    UDim2 = function(v)
-        return vector.create(v.X.Scale, v.X.Offset, v.Y.Scale), vector.create(v.Y.Offset, 0, 0)
-    end :: TypeToVec6<UDim2>,
+	UDim = function(v)
+		return vector.create(v.Scale, v.Offset, 0), vector.zero
+	end :: TypeToVec6<UDim>,
 
-    Vector2 = function(v)
-        return vector.create(v.X, v.Y, 0), vector.zero
-    end :: TypeToVec6<Vector2>,
+	UDim2 = function(v)
+		return vector.create(v.X.Scale, v.X.Offset, v.Y.Scale), vector.create(v.Y.Offset, 0, 0)
+	end :: TypeToVec6<UDim2>,
 
-    Vector3 = function(v)
-        return v, vector.zero
-    end :: TypeToVec6<Vector3>,
+	Vector2 = function(v)
+		return vector.create(v.X, v.Y, 0), vector.zero
+	end :: TypeToVec6<Vector2>,
 
-    Rect = function(v)
-        return vector.create(v.Min.X, v.Min.Y, v.Max.X), vector.create(v.Max.Y, 0, 0)
-    end :: TypeToVec6<Rect>,
+	Vector3 = function(v)
+		return v, vector.zero
+	end :: TypeToVec6<Vector3>,
 
-    table = function(v)
-        return vector.create(v[1] or 0, v[2] or 0, v[3] or 0), vector.create(v[4] or 0, 0, 0)
-    end :: TypeToVec6<{ number }>
+	Rect = function(v)
+		return vector.create(v.Min.X, v.Min.Y, v.Max.X), vector.create(v.Max.Y, 0, 0)
+	end :: TypeToVec6<Rect>,
+
+	table = function(v)
+		return vector.create(v[1] or 0, v[2] or 0, v[3] or 0), vector.create(v[4] or 0, 0, 0)
+	end :: TypeToVec6<{ number }>,
 }
 
 local vec6_to_type = {
-    number = function(a, b)
-        return a.X
-    end :: Vec6ToType<number>,
+	number = function(a, b)
+		return a.X
+	end :: Vec6ToType<number>,
 
-    CFrame = function(a, b)
-        return CFrame.new(a) * CFrame.fromEulerAnglesXYZ(b.X, b.Y, b.Z)
-    end :: Vec6ToType<CFrame>,
+	CFrame = function(a, b)
+		return CFrame.new(a) * CFrame.fromEulerAnglesXYZ(b.X, b.Y, b.Z)
+	end :: Vec6ToType<CFrame>,
 
-    Color3 = function(v)
-        return Color3.new(math.clamp(v.X, 0, 1), math.clamp(v.Y, 0, 1), math.clamp(v.Z, 0, 1))
-    end :: Vec6ToType<Color3>,
+	Color3 = function(v)
+		return Color3.new(math.clamp(v.X, 0, 1), math.clamp(v.Y, 0, 1), math.clamp(v.Z, 0, 1))
+	end :: Vec6ToType<Color3>,
 
-    UDim = function(v)
-        return UDim.new(v.X, math.round(v.Y))
-    end :: Vec6ToType<UDim>,
-    
-    UDim2 = function(a, b)
-        return UDim2.new(a.X, math.round(a.Y), a.Z, math.round(b.X))
-    end :: Vec6ToType<UDim2>,
+	UDim = function(v)
+		return UDim.new(v.X, math.round(v.Y))
+	end :: Vec6ToType<UDim>,
 
-    Vector2 = function(v)
-        return Vector2.new(v.X, v.Y)
-    end :: Vec6ToType<Vector2>,
+	UDim2 = function(a, b)
+		return UDim2.new(a.X, math.round(a.Y), a.Z, math.round(b.X))
+	end :: Vec6ToType<UDim2>,
 
-    Vector3 = function(v)
-        return v
-    end :: Vec6ToType<Vector3>,
+	Vector2 = function(v)
+		return Vector2.new(v.X, v.Y)
+	end :: Vec6ToType<Vector2>,
 
-    Rect = function(a, b)
-        return Rect.new(a.X, a.Y, a.Z, b.X)
-    end :: Vec6ToType<Rect>,
+	Vector3 = function(v)
+		return v
+	end :: Vec6ToType<Vector3>,
 
-    table = function(a, b)
-        return { a.X, a.Y, a.Z, b.X }
-    end :: Vec6ToType<{ number }>
+	Rect = function(a, b)
+		return Rect.new(a.X, a.Y, a.Z, b.X)
+	end :: Vec6ToType<Rect>,
+
+	table = function(a, b)
+		return { a.X, a.Y, a.Z, b.X }
+	end :: Vec6ToType<{ number }>,
 }
 
 local invalid_type = {
-    __index = function(_, t: string)
-        error(`cannot spring type {t}`, 0)
-    end
+	__index = function(_, t: string)
+		error(`cannot spring type {t}`, 0)
+	end,
 }
 
 setmetatable(type_to_vec6, invalid_type)
@@ -15183,197 +15238,194 @@ local springs: { [SpringState<unknown>]: SourceNode<unknown> } = {}
 setmetatable(springs :: any, { __mode = "v" })
 
 local function spring<T>(source: () -> T, period: number?, damping_ratio: number?): (() -> T, SpringSettings<T>)
-    local owner = assert_stable_scope()
+	local owner = assert_stable_scope()
 
-    -- https://en.wikipedia.org/wiki/Damping
-    local w_n = 2*math.pi / (period or 1)
-    local z = damping_ratio or 1
-    local k = w_n^2
-    local c_c = 2*w_n
-    local c = z * c_c
+	-- https://en.wikipedia.org/wiki/Damping
+	local w_n = 2 * math.pi / (period or 1)
+	local z = damping_ratio or 1
+	local k = w_n ^ 2
+	local c_c = 2 * w_n
+	local c = z * c_c
 
-    -- todo: is there a solution other than reducing step size?
-    -- todo: this does not catch all solver exploding cases
-    if c > UPDATE_RATE*2 then -- solver will explode if this is true
-        error("spring damping too high, consider reducing damping or increasing period", 0)
-    end
+	-- todo: is there a solution other than reducing step size?
+	-- todo: this does not catch all solver exploding cases
+	if c > UPDATE_RATE * 2 then -- solver will explode if this is true
+		error("spring damping too high, consider reducing damping or increasing period", 0)
+	end
 
-    local data: SpringState<T> = {
-        k = k,
-        c = c,
+	local data: SpringState<T> = {
+		k = k,
+		c = c,
 
-        x0_123 = vector.zero,
-        x_123 = vector.zero,
-        x1_123 = vector.zero,
-        v_123 = vector.zero,
+		x0_123 = vector.zero,
+		x_123 = vector.zero,
+		x1_123 = vector.zero,
+		v_123 = vector.zero,
 
-        x0_456 = vector.zero,
-        x_456 = vector.zero,
-        x1_456 = vector.zero,
-        v_456 = vector.zero,
+		x0_456 = vector.zero,
+		x_456 = vector.zero,
+		x1_456 = vector.zero,
+		v_456 = vector.zero,
 
-        source_value = false :: any,
-    }
-    
-    local output = create_source_node(false :: any)
+		source_value = false :: any,
+	}
 
-    local function updater_effect()
-        local value = source()
-        data.x1_123, data.x1_456 = type_to_vec6[typeof(value)](value)
-        data.source_value = value
-        springs[data] = output
-        return value
-    end
+	local output = create_source_node(false :: any)
 
-    local updater = create_node(owner, updater_effect, false :: any)
-    evaluate_node(updater)
+	local function updater_effect()
+		local value = source()
+		data.x1_123, data.x1_456 = type_to_vec6[typeof(value)](value)
+		data.source_value = value
+		springs[data] = output
+		return value
+	end
 
-    -- set initial position to goal
-    data.x_123, data.x_456 = data.x1_123, data.x1_456
+	local updater = create_node(owner, updater_effect, false :: any)
+	evaluate_node(updater)
 
-    -- set output to goal
-    output.cache = data.source_value
+	-- set initial position to goal
+	data.x_123, data.x_456 = data.x1_123, data.x1_456
 
-    local config = function(p)
-        local x = p.position
-        local v = p.velocity
-        local dv = p.impulse
+	-- set output to goal
+	output.cache = data.source_value
 
-        if x then
-            local x_123, x_456 = type_to_vec6[typeof(x)](x)
-            data.x_123, data.x_456 = x_123, x_456
-            data.x0_123, data.x0_456 = x_123, x_456
-        end
+	local config = function(p)
+		local x = p.position
+		local v = p.velocity
+		local dv = p.impulse
 
-        if v then
-            data.v_123, data.v_456 = type_to_vec6[typeof(v)](v)
-        end
+		if x then
+			local x_123, x_456 = type_to_vec6[typeof(x)](x)
+			data.x_123, data.x_456 = x_123, x_456
+			data.x0_123, data.x0_456 = x_123, x_456
+		end
 
-        if dv then
-            local dv_123, dv_456 = type_to_vec6[typeof(dv)](dv)
-            data.v_123 += dv_123
-            data.v_456 += dv_456
-        end
+		if v then
+			data.v_123, data.v_456 = type_to_vec6[typeof(v)](v)
+		end
 
-        -- schedule spring
-        springs[data] = output
-    end :: SpringSettings<T>
+		if dv then
+			local dv_123, dv_456 = type_to_vec6[typeof(dv)](dv)
+			data.v_123 += dv_123
+			data.v_456 += dv_456
+		end
 
-    return function(...)
-        if select("#", ...) == 0 then -- no args were given
-            push_scope_as_child_of(output)
-            return output.cache
-        end
+		-- schedule spring
+		springs[data] = output
+	end :: SpringSettings<T>
 
-        -- set current position to value
-        local v = ... :: T
-        data.x_123, data.x_456 = type_to_vec6[typeof(v)](v)
+	return function(...)
+		if select("#", ...) == 0 then -- no args were given
+			push_scope_as_child_of(output)
+			return output.cache
+		end
 
-        -- reset velocity
-        data.v_123 = vector.zero
-        data.v_456 = vector.zero
+		-- set current position to value
+		local v = ... :: T
+		data.x_123, data.x_456 = type_to_vec6[typeof(v)](v)
 
-        -- schedule spring
-        springs[data] = output
+		-- reset velocity
+		data.v_123 = vector.zero
+		data.v_456 = vector.zero
 
-        -- set output to value
-        output.cache = v
+		-- schedule spring
+		springs[data] = output
 
-        return v
-    end, config
+		-- set output to value
+		output.cache = v
+
+		return v
+	end,
+		config
 end
 
 -- calculates a float tolerance, based on the magnitude of the float
 local function get_min_step(x: number): number
-    return x/TOLERANCE_FACTOR
+	return x / TOLERANCE_FACTOR
 end
 local function get_min_vector_step(direction: vector): vector
-    return vector.create(
-        get_min_step(direction.x),
-        get_min_step(direction.y),
-        get_min_step(direction.z)
-    )
+	return vector.create(get_min_step(direction.x), get_min_step(direction.y), get_min_step(direction.z))
 end
 
 local function step_springs(dt: number)
-    for s in springs do
-        local k = s.k
-        local c = s.c
-        local x_123, x_456 = s.x_123, s.x_456
-        local x1_123, x1_456 = s.x1_123, s.x1_456
-        local u_123, u_456 = s.v_123, s.v_456
+	for s in springs do
+		local k = s.k
+		local c = s.c
+		local x_123, x_456 = s.x_123, s.x_456
+		local x1_123, x1_456 = s.x1_123, s.x1_456
+		local u_123, u_456 = s.v_123, s.v_456
 
-        -- calculate displacement from target
-        local dx_123 = x_123 - x1_123
-        local dx_456 = x_456 - x1_456
+		-- calculate displacement from target
+		local dx_123 = x_123 - x1_123
+		local dx_456 = x_456 - x1_456
 
-        -- calculate spring force
-        local fs_123 = dx_123*-k
-        local fs_456 = dx_456*-k
+		-- calculate spring force
+		local fs_123 = dx_123 * -k
+		local fs_456 = dx_456 * -k
 
-        -- calculate friction force
-        local ff_123 = u_123*-c
-        local ff_456 = u_456*-c
+		-- calculate friction force
+		local ff_123 = u_123 * -c
+		local ff_456 = u_456 * -c
 
-        -- calculate acceleration
-        local a_123 = (fs_123 + ff_123)
-        local a_456 = (fs_456 + ff_456)
+		-- calculate acceleration
+		local a_123 = (fs_123 + ff_123)
+		local a_456 = (fs_456 + ff_456)
 
-        -- step acceleration
-        local v_123 = u_123 + a_123*dt
-        local v_456 = u_456 + a_456*dt
+		-- step acceleration
+		local v_123 = u_123 + a_123 * dt
+		local v_456 = u_456 + a_456 * dt
 
-        -- step velocity
-        local y_123 = x_123 + v_123*dt
-        local y_456 = x_456 + v_456*dt
+		-- step velocity
+		local y_123 = x_123 + v_123 * dt
+		local y_456 = x_456 + v_456 * dt
 
-        s.x_123, s.x_456 = y_123, y_456
-        s.v_123, s.v_456 = v_123, v_456
-    end
+		s.x_123, s.x_456 = y_123, y_456
+		s.v_123, s.v_456 = v_123, v_456
+	end
 end
 
 local function update_spring_sources()
-    for data, output in springs do
-        local x0_123, x0_456 = data.x0_123, data.x0_456
-        local x_123, x_456 = data.x_123, data.x_456
-        local x1_123, x1_456 = data.x1_123, data.x1_456
-        local v_123, v_456 = data.v_123, data.v_456
+	for data, output in springs do
+		local x0_123, x0_456 = data.x0_123, data.x0_456
+		local x_123, x_456 = data.x_123, data.x_456
+		local x1_123, x1_456 = data.x1_123, data.x1_456
+		local v_123, v_456 = data.v_123, data.v_456
 
-        local tol_123 = vector.abs(get_min_vector_step(x0_123 - x1_123))
-        local tol_456 = vector.abs(get_min_vector_step(x0_456 - x1_456))
+		local tol_123 = vector.abs(get_min_vector_step(x0_123 - x1_123))
+		local tol_456 = vector.abs(get_min_vector_step(x0_456 - x1_456))
 
-        if
-            -- position is at goal (within tolerance)
-            vector.max(vector.abs(x_123 - x1_123), tol_123) == tol_123
-            and vector.max(vector.abs(x_456 - x1_456), tol_456) == tol_456
+		if
+			-- position is at goal (within tolerance)
+			vector.max(vector.abs(x_123 - x1_123), tol_123) == tol_123
+			and vector.max(vector.abs(x_456 - x1_456), tol_456) == tol_456
+			-- velocity is at 0 (within tolerance)
+			and vector.max(vector.abs(v_123 / 10), tol_123) == tol_123
+			and vector.max(vector.abs(v_456 / 10), tol_456) == tol_456
+		then
+			springs[data] = nil
+			output.cache = data.source_value
+		else
+			output.cache = vec6_to_type[typeof(data.source_value)](x_123, x_456)
+		end
 
-            -- velocity is at 0 (within tolerance)
-            and vector.max(vector.abs(v_123/10), tol_123) == tol_123
-            and vector.max(vector.abs(v_456/10), tol_456) == tol_456
-        then
-            springs[data] = nil
-            output.cache = data.source_value
-        else
-            output.cache = vec6_to_type[typeof(data.source_value)](x_123, x_456)
-        end
-
-        update_descendants(output)
-    end
+		update_descendants(output)
+	end
 end
 
 return function()
-    local time_elapsed = 0
+	local time_elapsed = 0
 
-    return spring, function(dt: number)
-        time_elapsed += dt
+	return spring,
+		function(dt: number)
+			time_elapsed += dt
 
-        while time_elapsed > 1 / UPDATE_RATE do
-            time_elapsed -= 1 / UPDATE_RATE
-            step_springs(1 / UPDATE_RATE)
-        end
+			while time_elapsed > 1 / UPDATE_RATE do
+				time_elapsed -= 1 / UPDATE_RATE
+				step_springs(1 / UPDATE_RATE)
+			end
 
-        update_spring_sources()
-    end
+			update_spring_sources()
+		end
 end
 ]]></string>
             </Properties>
@@ -15381,117 +15433,112 @@ end
           <Item class="ModuleScript" referent="65">
             <Properties>
               <string name="Name">switch</string>
-              <string name="Source"><![CDATA[local branch = require "./branch"
-local source = require "./source"
-local effect = require "./effect"
-local timeout = require "./timeout" ()
+              <string name="Source"><![CDATA[local branch = require("./branch")
+local effect = require("./effect")
+local source = require("./source")
+local timeout = require("./timeout")()
 
 type Array<T> = { T }
 type Map<K, V> = { [K]: V }
 type Source<T> = () -> T
 type Component<T> = (Source<boolean>) -> (T, ...number)
 
-local function switch_map<K, Obj>(
-    input: Source<K>,
-    map: Map<K, Component<Obj>>
-): Source<nil | Obj | Array<Obj>>
-    local scopes = {} :: Map<K, {
-        destroy: () -> (),
-        object: Obj,
-        delay: number,
-        present: (boolean?) -> boolean,
-        timeout: { cancel: boolean }?
-    }>
+local function switch_map<K, Obj>(input: Source<K>, map: Map<K, Component<Obj>>): Source<nil | Obj | Array<Obj>>
+	local scopes = {} :: Map<K, {
+		destroy: () -> (),
+		object: Obj,
+		delay: number,
+		present: (boolean?) -> boolean,
+		timeout: { cancel: boolean }?,
+	}>
 
-    local output = source(nil :: nil | Obj | Array<Obj>)
-    local function update_output()
-        local objects = {}
+	local output = source(nil :: nil | Obj | Array<Obj>)
+	local function update_output()
+		local objects = {}
 
-        for _, scope in scopes do
-            table.insert(objects, scope.object)
-        end
+		for _, scope in scopes do
+			table.insert(objects, scope.object)
+		end
 
-        output(
-            if objects[2] then objects
-            elseif objects[1] then objects[1]
-            else nil
-        )
-    end
+		output(if objects[2] then objects elseif objects[1] then objects[1] else nil)
+	end
 
-    effect(function()
-        local key: K? = input()
+	effect(function()
+		local key: K? = input()
 
-        -- destroy (or queue destroy) all scopes not associated with the input key
-        for k, scope in scopes do
-            if k == key then continue end
+		-- destroy (or queue destroy) all scopes not associated with the input key
+		for k, scope in scopes do
+			if k == key then
+				continue
+			end
 
-            scope.present(false)
+			scope.present(false)
 
-            if scope.delay == 0 then
-                scope.destroy()
-                scopes[k] = nil
-            else
-                if scope.timeout == nil then
-                    scope.timeout = timeout(scope.delay, function()
-                        scope.destroy()
-                        scopes[k] = nil
-                        update_output()
-                    end)
-                end
-            end
-        end
+			if scope.delay == 0 then
+				scope.destroy()
+				scopes[k] = nil
+			else
+				if scope.timeout == nil then
+					scope.timeout = timeout(scope.delay, function()
+						scope.destroy()
+						scopes[k] = nil
+						update_output()
+					end)
+				end
+			end
+		end
 
-        -- create new scope or abort destruction of existing scope if key exists
-        if key ~= nil then
-            local scope = scopes[key]
+		-- create new scope or abort destruction of existing scope if key exists
+		if key ~= nil then
+			local scope = scopes[key]
 
-            if scope then
-                scope.present(true)
+			if scope then
+				scope.present(true)
 
-                if scope.timeout then
-                    scope.timeout.cancel = true
-                    scope.timeout = nil
-                end
-            else
-                local component = map[key]
+				if scope.timeout then
+					scope.timeout.cancel = true
+					scope.timeout = nil
+				end
+			else
+				local component = map[key]
 
-                if component ~= nil then
-                    if type(component) ~= "function" then
-                        error("map must map a value to a function", 0)
-                    end
+				if component ~= nil then
+					if type(component) ~= "function" then
+						error("map must map a value to a function", 0)
+					end
 
-                    local present = source(false)
+					local present = source(false)
 
-                    local delay = nil :: number?
-                    local destroy, object = branch(function()
-                        local object, t = component(present)
-                        delay = t
-                        return object
-                    end)
+					local delay = nil :: number?
+					local destroy, object = branch(function()
+						local object, t = component(present)
+						delay = t
+						return object
+					end)
 
-                    present(true)
+					present(true)
 
-                    scopes[key] = {
-                        destroy = destroy,
-                        object = object,
-                        delay = delay or 0,
-                        present = present,
-                        timeout = nil
-                    }
-                end
-            end
-        end
+					scopes[key] = {
+						destroy = destroy,
+						object = object,
+						delay = delay or 0,
+						present = present,
+						timeout = nil,
+					}
+				end
+			end
+		end
 
-        update_output()
-    end)
+		update_output()
+	end)
 
-    return output
+	return output
 end
 
 local function switch<K, Obj>(input: Source<K>): (map: Map<K, Component<Obj>>) -> Source<nil | Obj | Array<Obj>>
-    return function(map)
-        return switch_map(input, map)
-    end
+	return function(map)
+		return switch_map(input, map)
+	end
 end
 
 return switch
@@ -15501,198 +15548,200 @@ return switch
           <Item class="ModuleScript" referent="66">
             <Properties>
               <string name="Name">timeout</string>
-              <string name="Source"><![CDATA[local queue = {} :: {
-    { t: number, fn: () -> (), cancel: boolean }
-}
+              <string name="Source"><![CDATA[local queue = {} :: { { t: number, fn: () -> (), cancel: boolean } }
 
 local function timeout(t: number, fn: () -> ())
-    local handle = { t = t, fn = fn, cancel = false }
-    table.insert(queue, handle)
-    return handle
+	local handle = { t = t, fn = fn, cancel = false }
+	table.insert(queue, handle)
+	return handle
 end
 
 local function update_timeouts(dt: number)
-    for i = #queue, 1, -1 do
-        local handle = queue[i]
-        handle.t -= dt
-        
-        if handle.cancel or handle.t <= 0 then
-            queue[i] = queue[#queue]
-            queue[#queue] = nil
+	for i = #queue, 1, -1 do
+		local handle = queue[i]
+		handle.t -= dt
 
-            if not handle.cancel then
-                handle.fn()
-            end
-        end
-    end
+		if handle.cancel or handle.t <= 0 then
+			queue[i] = queue[#queue]
+			queue[#queue] = nil
+
+			if not handle.cancel then
+				handle.fn()
+			end
+		end
+	end
 end
 
-return function() return timeout, update_timeouts end
+return function()
+	return timeout, update_timeouts
+end
 ]]></string>
             </Properties>
           </Item>
           <Item class="ModuleScript" referent="67">
             <Properties>
               <string name="Name">untrack</string>
-              <string name="Source"><![CDATA[local graph = require "./graph"
+              <string name="Source"><![CDATA[local graph = require("./graph")
 type Node<T> = graph.Node<T>
 local get_scope = graph.get_scope
 
 local function untrack<T>(source: () -> T): T
-    local scope = get_scope()
-    
-    if scope then
-        -- sources are only tracked if the node in scope has an effect
-        local effect = scope.effect
-        scope.effect = false
+	local scope = get_scope()
 
-        local ok, result = xpcall(source, debug.traceback)
+	if scope then
+		-- sources are only tracked if the node in scope has an effect
+		local effect = scope.effect
+		scope.effect = false
 
-        scope.effect = effect :: () -> ()
+		local ok, result = xpcall(source, debug.traceback)
 
-        if not ok then error(result, 0) end
+		scope.effect = effect :: () -> ()
 
-        return result :: T
-    else
-        return source()
-    end
+		if not ok then
+			error(result, 0)
+		end
+
+		return result :: T
+	else
+		return source()
+	end
 end
 
-return untrack :: ( <T>(fn: () -> T) -> T ) & ( (fn: () -> ()) -> () )
+return untrack :: (<T>(fn: () -> T) -> T) & ((fn: () -> ()) -> ())
 ]]></string>
             </Properties>
           </Item>
           <Item class="ModuleScript" referent="68">
             <Properties>
               <string name="Name">values</string>
-              <string name="Source"><![CDATA[local flags = require "./flags"
-local branch = require "./branch"
-local source = require "./source"
-local effect = require "./effect"
-local timeout = require "./timeout" ()
+              <string name="Source"><![CDATA[local branch = require("./branch")
+local effect = require("./effect")
+local flags = require("./flags")
+local source = require("./source")
+local timeout = require("./timeout")()
 
 type Array<T> = { T }
 type Map<K, V> = { [K]: V }
 type Source<T> = () -> T
 
 local function values<K, V, Obj>(
-    input: Source<Map<K, V>>,
-    component: (V, Source<K>, Source<boolean>) -> (Obj, ...number)
+	input: Source<Map<K, V>>,
+	component: (V, Source<K>, Source<boolean>) -> (Obj, ...number)
 ): Source<Array<Obj>>
-    local update_count = 0
-    local scopes = {} :: Map<V, {
-        destroy: () -> (),
-        object: Obj,
-        index: K?,
-        index_source: (K?) -> K,
-        count: number,
-        delay: number,
-        present: (boolean?) -> boolean,
-        timeout: { cancel: boolean }?,
-    }>
+	local update_count = 0
+	local scopes = {} :: Map<V, {
+		destroy: () -> (),
+		object: Obj,
+		index: K?,
+		index_source: (K?) -> K,
+		count: number,
+		delay: number,
+		present: (boolean?) -> boolean,
+		timeout: { cancel: boolean }?,
+	}>
 
-    local output = source({} :: Array<Obj>)
-    local function update_output()
-        local objects = table.create(4)
+	local output = source({} :: Array<Obj>)
+	local function update_output()
+		local objects = table.create(4)
 
-        for _, scope in scopes do
-            table.insert(objects, scope.object)
-        end
+		for _, scope in scopes do
+			table.insert(objects, scope.object)
+		end
 
-        output(objects)
-    end
+		output(objects)
+	end
 
-    effect(function()
-        local data = input()
+	effect(function()
+		local data = input()
 
-        local count = update_count
-        update_count += 1
+		local count = update_count
+		update_count += 1
 
-        local children_need_update = false -- set to true if a scope is created or destroyed
+		local children_need_update = false -- set to true if a scope is created or destroyed
 
-        if flags.strict then -- check for duplicate values
-            local map = {}
-            for _, v in data do
-                if map[v] then
-                    error("table source passed to `values()` contains duplicate values", 0)
-                end
-                map[v] = true
-            end
-        end
+		if flags.strict then -- check for duplicate values
+			local map = {}
+			for _, v in data do
+				if map[v] then
+					error("table source passed to `values()` contains duplicate values", 0)
+				end
+				map[v] = true
+			end
+		end
 
-        -- create or update scopes
-        for i, v in data do
-            local scope = scopes[v]
+		-- create or update scopes
+		for i, v in data do
+			local scope = scopes[v]
 
-            if scope == nil then -- create new scope and create component
-                local index_source = source(i)
-                local present = source(false)
+			if scope == nil then -- create new scope and create component
+				local index_source = source(i)
+				local present = source(false)
 
-                local delay = nil :: number?
-                local destroy, object = branch(function()
-                    local object, t = component(v, index_source, present)
-                    delay = t
-                    return object
-                end)
+				local delay = nil :: number?
+				local destroy, object = branch(function()
+					local object, t = component(v, index_source, present)
+					delay = t
+					return object
+				end)
 
-                present(true)
-                
-                children_need_update = true
+				present(true)
 
-                scopes[v] = {
-                    destroy = destroy,
-                    object = object,
-                    index = i,
-                    index_source = index_source,
-                    count = count,
-                    delay = delay or 0,
-                    present = present,
-                    timeout = nil,
-                }
-            else -- update scope
-                scope.count = count
+				children_need_update = true
 
-                if scope.index ~= i then
-                    if scope.timeout then -- value is in input table again; cancel destruction
-                        scope.timeout.cancel = true
-                        scope.timeout = nil
-                        scope.present(true)
-                    end
-                    
-                    scope.index = i
-                    scope.index_source(i)
-                end
-            end
-        end
+				scopes[v] = {
+					destroy = destroy,
+					object = object,
+					index = i,
+					index_source = index_source,
+					count = count,
+					delay = delay or 0,
+					present = present,
+					timeout = nil,
+				}
+			else -- update scope
+				scope.count = count
 
-        -- destroy scopes
-        for v, scope in scopes do
-            if scope.count < count then -- if count is not latest then value is no longer in the input table
-                scope.present(false)
+				if scope.index ~= i then
+					if scope.timeout then -- value is in input table again; cancel destruction
+						scope.timeout.cancel = true
+						scope.timeout = nil
+						scope.present(true)
+					end
 
-                if scope.delay == 0 then
-                    scope.destroy()
-                    scopes[v] = nil
-                    children_need_update = true
-                else
-                    scope.index = nil -- set to nil for the `scope.index ~= i` check
-                    if scope.timeout == nil then
-                        scope.timeout = timeout(scope.delay, function() -- todo: possible redundant updates
-                            scope.destroy()
-                            scopes[v] = nil
-                            update_output()
-                        end)
-                    end
-                end
-            end
-        end
+					scope.index = i
+					scope.index_source(i)
+				end
+			end
+		end
 
-        if children_need_update then
-            update_output()
-        end
-    end)
+		-- destroy scopes
+		for v, scope in scopes do
+			if scope.count < count then -- if count is not latest then value is no longer in the input table
+				scope.present(false)
 
-    return output
+				if scope.delay == 0 then
+					scope.destroy()
+					scopes[v] = nil
+					children_need_update = true
+				else
+					scope.index = nil -- set to nil for the `scope.index ~= i` check
+					if scope.timeout == nil then
+						scope.timeout = timeout(scope.delay, function() -- todo: possible redundant updates
+							scope.destroy()
+							scopes[v] = nil
+							update_output()
+						end)
+					end
+				end
+			end
+		end
+
+		if children_need_update then
+			update_output()
+		end
+	end)
+
+	return output
 end
 
 return values
@@ -19400,21 +19449,76 @@ return require(script.Parent.gt).t
           </Properties>
           <Item class="ModuleScript" referent="78">
             <Properties>
+              <string name="Name">AmmoHud</string>
+              <string name="Source"><![CDATA[local Vide = require("../../../modules/Vide")
+local VideCharm = require("../../../modules/VideCharm")
+local ammoStore = require("../stores/ammoStore")
+local fonts = require("../utils/fonts")
+local px = require("../utils/px")
+
+local create = Vide.create
+local useAtom = VideCharm.useAtom
+
+local function AmmoHud()
+	px.usePx()
+
+	local ammoState = useAtom(ammoStore.getAmmoState)
+
+	return create("ScreenGui")({
+		Name = "AmmoHud",
+		ResetOnSpawn = false,
+		DisplayOrder = 10,
+
+		create("TextLabel")({
+			AnchorPoint = Vector2.new(0.5, 1),
+			Position = px.udim2(0.5, 0, 1, -24),
+			Size = px.offset(180, 36),
+			BackgroundTransparency = 1,
+			TextColor3 = Color3.new(1, 1, 1),
+			TextSize = px(20),
+			FontFace = fonts.inter.semibold,
+			TextStrokeTransparency = 0.5,
+			Visible = Vide.derive(function()
+				return ammoState().visible
+			end),
+			Text = Vide.derive(function()
+				local state = ammoState()
+				if state.reloading then
+					return "reloading..."
+				end
+				return `{state.current} / {state.max}`
+			end),
+		}),
+	})
+end
+
+return AmmoHud
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="79">
+            <Properties>
               <string name="Name">App</string>
               <string name="Source"><![CDATA[local Vide = require("../../../modules/Vide")
+local useGun = require("../hooks/useGun")
 
 local create = Vide.create
 
 local function App()
+	local getGun = useGun()
+
 	return create("ScreenGui")({
 		Name = "App",
 
 		create("TextLabel")({
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(200, 50),
+			Size = UDim2.fromOffset(260, 50),
 			BackgroundTransparency = 1,
-			Text = "proj-elect",
+			Text = Vide.derive(function()
+				local gun = getGun()
+				return if gun then `Equipped: {gun.name}` else "proj-elect"
+			end),
 			TextColor3 = Color3.new(1, 1, 1),
 			TextSize = 24,
 			Font = Enum.Font.GothamBold,
@@ -19427,40 +19531,526 @@ return App
             </Properties>
           </Item>
         </Item>
-        <Item class="Folder" referent="79">
+        <Item class="Folder" referent="80">
           <Properties>
             <string name="Name">hooks</string>
           </Properties>
+          <Item class="ModuleScript" referent="81">
+            <Properties>
+              <string name="Name">useCharacter</string>
+              <string name="Source"><![CDATA[local Players = game:GetService("Players")
+
+local Vide = require("../../../modules/Vide")
+local useEventListener = require("./useEventListener")
+
+local function useCharacter(): () -> Model?
+	local character = Vide.source(Players.LocalPlayer.Character)
+
+	useEventListener(Players.LocalPlayer.CharacterAdded, function(model: Model)
+		character(model)
+	end)
+
+	useEventListener(Players.LocalPlayer.CharacterRemoving, function()
+		character(nil)
+	end)
+
+	return character
+end
+
+return useCharacter
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="82">
+            <Properties>
+              <string name="Name">useEventListener</string>
+              <string name="Source"><![CDATA[local Vide = require("../../../modules/Vide")
+
+local function useEventListener<T>(event: RBXScriptSignal<T>, callback: (T) -> ()): ()
+	Vide.cleanup(event:Connect(callback))
+end
+
+return useEventListener
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="83">
+            <Properties>
+              <string name="Name">useGun</string>
+              <string name="Source"><![CDATA[local Vide = require("../../../modules/Vide")
+local guns = require("../../shared/constants/guns")
+local useCharacter = require("./useCharacter")
+local useEventListener = require("./useEventListener")
+
+local function useGun(): () -> guns.GunInfo?
+	local currentGun = Vide.source(nil :: guns.GunInfo?)
+	local getCharacter = useCharacter()
+
+	Vide.effect(function()
+		local character = getCharacter()
+
+		if not character then
+			return
+		end
+
+		local function updateCurrentGun()
+			local gunId = guns.getGunIdFromCharacter(character)
+			currentGun(gunId and guns.getGun(gunId))
+		end
+
+		useEventListener(character.ChildAdded, function(child: Instance)
+			if child:IsA("Tool") then
+				updateCurrentGun()
+			end
+		end)
+
+		useEventListener(character.ChildRemoved, function(child: Instance)
+			if child:IsA("Tool") then
+				updateCurrentGun()
+			end
+		end)
+
+		updateCurrentGun()
+
+		Vide.cleanup(function()
+			currentGun(nil)
+		end)
+	end)
+
+	return currentGun
+end
+
+return useGun
+]]></string>
+            </Properties>
+          </Item>
         </Item>
-        <Item class="Folder" referent="80">
+        <Item class="Folder" referent="84">
           <Properties>
             <string name="Name">lib</string>
           </Properties>
-          <Item class="Script" referent="81">
+          <Item class="Script" referent="85">
             <Properties>
               <string name="Name">app</string>
               <token name="RunContext">2</token>
               <string name="Source"><![CDATA[local Players = game:GetService("Players")
 
+local AmmoHud = require("../components/AmmoHud")
 local App = require("../components/App")
 local Vide = require("../../../modules/Vide")
 
 local mount = Vide.mount
 
 mount(App, Players.LocalPlayer.PlayerGui)
+mount(AmmoHud, Players.LocalPlayer.PlayerGui)
 ]]></string>
             </Properties>
           </Item>
-          <Item class="Script" referent="82">
+          <Item class="ModuleScript" referent="86">
+            <Properties>
+              <string name="Name">gunController</string>
+              <string name="Source"><![CDATA[local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local ammoStore = require("../stores/ammoStore")
+local guns = require("../../shared/constants/guns")
+local remotes = require("../../shared/remotes")
+
+local function playSound(tool: Tool, name: string)
+	local handle = tool:FindFirstChild("Handle")
+	if not handle then
+		return
+	end
+
+	local soundTemplate = handle:FindFirstChild(name)
+	if not soundTemplate or not soundTemplate:IsA("Sound") then
+		return
+	end
+
+	local sound = soundTemplate:Clone()
+	sound.Parent = handle
+	sound:Play()
+	sound.Ended:Once(function()
+		sound:Destroy()
+	end)
+end
+
+local function getGunOrigin(tool: Tool): Vector3?
+	local shootPart = tool:FindFirstChild("ShootPart")
+	if not shootPart or not shootPart:IsA("BasePart") then
+		warn(`Missing ShootPart in gun: {tool.Name}`)
+		return nil
+	end
+
+	return shootPart.Position
+end
+
+local function updateAmmoDisplay(current: number, max: number, reloading: boolean)
+	ammoStore.setAmmoState({
+		current = current,
+		max = max,
+		reloading = reloading,
+		visible = true,
+	})
+end
+
+local function connect(tool: Tool): () -> ()
+	local player = Players.LocalPlayer
+	local gunStats = guns.getGunByName(tool.Name)
+	if not gunStats then
+		return function() end
+	end
+
+	local fireDelay = 1 / gunStats.fireRate
+	local maxAmmo = gunStats.maxAmmo
+	local reloadTime = gunStats.reloadTime
+	local automatic = gunStats.automatic
+
+	local holding = false
+	local lastFire = 0
+	local ammo = maxAmmo
+	local reloading = false
+	local mouse: Mouse? = nil
+	local connections: { RBXScriptConnection } = {}
+	local reloadThread: thread? = nil
+
+	local function getAimPosition(): Vector3?
+		if not mouse then
+			return nil
+		end
+
+		local hit = mouse.Hit
+		return hit and hit.Position or nil
+	end
+
+	local function requestShot(origin: Vector3, targetPos: Vector3)
+		remotes.shootGun:FireServer(tool, origin, targetPos)
+	end
+
+	local function fireSingleShot()
+		if reloading or ammo <= 0 then
+			return
+		end
+
+		local now = tick()
+		if now - lastFire < fireDelay then
+			return
+		end
+		lastFire = now
+
+		local target = getAimPosition()
+		local origin = getGunOrigin(tool)
+		if not target or not origin then
+			return
+		end
+
+		requestShot(origin, target)
+		ammo -= 1
+		updateAmmoDisplay(ammo, maxAmmo, false)
+	end
+
+	local function startAutoFire()
+		if not holding then
+			return
+		end
+
+		while holding and not reloading and ammo > 0 do
+			local now = tick()
+			if now - lastFire >= fireDelay then
+				fireSingleShot()
+			end
+			RunService.Heartbeat:Wait()
+		end
+	end
+
+	local function startReload()
+		if reloading or ammo >= maxAmmo then
+			return
+		end
+
+		reloading = true
+		updateAmmoDisplay(ammo, maxAmmo, true)
+		playSound(tool, "Reload")
+
+		if reloadThread then
+			task.cancel(reloadThread)
+		end
+
+		reloadThread = task.delay(reloadTime, function()
+			ammo = maxAmmo
+			reloading = false
+			reloadThread = nil
+			updateAmmoDisplay(ammo, maxAmmo, false)
+		end)
+	end
+
+	local function onActivated()
+		if ammo > 0 then
+			if automatic then
+				holding = true
+				task.spawn(startAutoFire)
+			else
+				fireSingleShot()
+			end
+		else
+			startReload()
+		end
+	end
+
+	local function onDeactivated()
+		holding = false
+	end
+
+	table.insert(
+		connections,
+		tool.Equipped:Connect(function()
+			mouse = player:GetMouse()
+			playSound(tool, "Equip")
+			updateAmmoDisplay(ammo, maxAmmo, false)
+		end)
+	)
+
+	table.insert(
+		connections,
+		tool.Unequipped:Connect(function()
+			holding = false
+			mouse = nil
+			ammoStore.setAmmoState({
+				current = ammo,
+				max = maxAmmo,
+				reloading = false,
+				visible = false,
+			})
+		end)
+	)
+
+	table.insert(connections, tool.Activated:Connect(onActivated))
+	table.insert(connections, tool.Deactivated:Connect(onDeactivated))
+
+	table.insert(
+		connections,
+		UserInputService.InputBegan:Connect(function(input, gameProcessed)
+			if gameProcessed then
+				return
+			end
+			if input.KeyCode == Enum.KeyCode.R and tool.Parent == player.Character then
+				startReload()
+			end
+		end)
+	)
+
+	if tool.Parent == player.Character then
+		mouse = player:GetMouse()
+		updateAmmoDisplay(ammo, maxAmmo, false)
+	end
+
+	return function()
+		holding = false
+		if reloadThread then
+			task.cancel(reloadThread)
+		end
+		for _, connection in connections do
+			connection:Disconnect()
+		end
+		ammoStore.setAmmoState({
+			current = 0,
+			max = 0,
+			reloading = false,
+			visible = false,
+		})
+	end
+end
+
+return {
+	connect = connect,
+}
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="Script" referent="87">
+            <Properties>
+              <string name="Name">guns</string>
+              <token name="RunContext">2</token>
+              <string name="Source"><![CDATA[local Players = game:GetService("Players")
+
+local gunController = require("./gunController")
+local guns = require("../../shared/constants/guns")
+local observers = require("../../shared/utils/observers")
+
+local function connectGunTool(tool: Tool): (() -> ())?
+	local gunId = guns.getGunIdFromTool(tool)
+	if not gunId then
+		return nil
+	end
+
+	return gunController.connect(tool)
+end
+
+local function observeCharacterTools(character: Model): () -> ()
+	local cleanup: (() -> ())?
+
+	local function updateEquippedTool()
+		if cleanup then
+			cleanup()
+			cleanup = nil
+		end
+
+		local tool = character:FindFirstChildWhichIsA("Tool")
+		if tool then
+			cleanup = connectGunTool(tool)
+		end
+	end
+
+	local childAdded = character.ChildAdded:Connect(function(child)
+		if child:IsA("Tool") then
+			updateEquippedTool()
+		end
+	end)
+
+	local childRemoved = character.ChildRemoved:Connect(function(child)
+		if child:IsA("Tool") then
+			updateEquippedTool()
+		end
+	end)
+
+	updateEquippedTool()
+
+	return function()
+		childAdded:Disconnect()
+		childRemoved:Disconnect()
+		if cleanup then
+			cleanup()
+		end
+	end
+end
+
+observers.observePlayers(function(observedPlayer)
+	if observedPlayer ~= Players.LocalPlayer then
+		return nil
+	end
+
+	return observers.observeCharacter(observedPlayer, observeCharacterTools)
+end)
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="Script" referent="88">
+            <Properties>
+              <string name="Name">shootEffects</string>
+              <token name="RunContext">2</token>
+              <string name="Source"><![CDATA[local Debris = game:GetService("Debris")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local bulletAssets = require("../../shared/constants/bulletAssets")
+local remotes = require("../../shared/remotes")
+
+local player = Players.LocalPlayer
+
+local function performRaycast(origin: Vector3, direction: Vector3)
+	local rayParams = RaycastParams.new()
+	local filter: { Instance } = {}
+	if player.Character then
+		table.insert(filter, player.Character)
+	end
+	rayParams.FilterDescendantsInstances = filter
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.IgnoreWater = true
+
+	local rayResult = workspace:Raycast(origin, direction, rayParams)
+	local hitPos = rayResult and rayResult.Position or (origin + direction)
+
+	return hitPos, rayResult
+end
+
+local function showBulletTrail(origin: Vector3, hitPos: Vector3)
+	local trail = bulletAssets.createBulletTrail()
+	trail.Parent = workspace
+
+	local midPoint = (origin + hitPos) / 2
+	trail.CFrame = CFrame.new(midPoint, hitPos)
+
+	local distance = (hitPos - origin).Magnitude
+	trail.Size = Vector3.new(trail.Size.X, trail.Size.Y, distance)
+
+	local tween = TweenService:Create(trail, TweenInfo.new(0.2), {
+		Transparency = 1,
+	})
+	tween:Play()
+
+	Debris:AddItem(trail, 0.3)
+end
+
+local function showBulletShot(origin: Vector3, unitDir: Vector3, speed: number, range: number)
+	local bullet = bulletAssets.createBullet()
+	bullet.CFrame = CFrame.new(origin, origin + unitDir)
+	bullet.Parent = workspace
+
+	local traveled = 0
+	local connection: RBXScriptConnection
+	connection = RunService.RenderStepped:Connect(function(dt)
+		local step = speed * dt
+		local currentPos = bullet.Position
+		local nextPos = currentPos + unitDir * step
+		local direction = nextPos - currentPos
+		local _, rayResult = performRaycast(currentPos, direction)
+
+		if rayResult then
+			bullet:Destroy()
+			connection:Disconnect()
+			return
+		end
+
+		bullet.CFrame = CFrame.new(nextPos, nextPos + unitDir)
+		traveled += step
+
+		if traveled >= range then
+			bullet:Destroy()
+			connection:Disconnect()
+		end
+	end)
+end
+
+remotes.gunEffect.OnClientEvent:Connect(function(args)
+	if not args then
+		return
+	end
+
+	if args.effect == "BulletTrail" then
+		local origin = args.origin
+		local hitPos = args.hitPos
+		if origin and hitPos then
+			showBulletTrail(origin, hitPos)
+		end
+	elseif args.effect == "BulletShot" then
+		local origin = args.origin
+		local direction = args.direction
+		local bulletSpeed = args.bulletSpeed
+		local range = args.range
+		if origin and direction and bulletSpeed and range then
+			showBulletShot(origin, direction, bulletSpeed, range)
+		end
+	end
+end)
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="Script" referent="89">
             <Properties>
               <string name="Name">sync</string>
               <token name="RunContext">2</token>
-              <string name="Source"><![CDATA[local CharmSync = require("../../../modules/CharmSync")
+              <string name="Source"><![CDATA[local Players = game:GetService("Players")
+
+local CharmSync = require("../../../modules/CharmSync")
+local appStore = require("../stores/appStore")
 local gameStore = require("../../shared/stores/gameStore")
 local remotes = require("../../shared/remotes")
 
 CharmSync.client.addSignals({
 	game = gameStore.setState,
+	[`account-{Players.LocalPlayer.Name}`] = appStore.setAccount,
 })
 
 remotes.patch.OnClientEvent:Connect(function(patches)
@@ -19470,52 +20060,568 @@ end)
             </Properties>
           </Item>
         </Item>
-        <Item class="Folder" referent="83">
+        <Item class="Folder" referent="90">
           <Properties>
             <string name="Name">stores</string>
           </Properties>
-          <Item class="ModuleScript" referent="84">
+          <Item class="ModuleScript" referent="91">
+            <Properties>
+              <string name="Name">ammoStore</string>
+              <string name="Source"><![CDATA[local Charm = require("../../../modules/Charm")
+
+export type AmmoState = {
+	current: number,
+	max: number,
+	reloading: boolean,
+	visible: boolean,
+}
+
+local ammoTemplate: AmmoState = {
+	current = 0,
+	max = 0,
+	reloading = false,
+	visible = false,
+}
+
+local getAmmoState, setAmmoState = Charm.signal(ammoTemplate)
+
+return {
+	getAmmoState = getAmmoState,
+	setAmmoState = setAmmoState,
+}
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="92">
             <Properties>
               <string name="Name">appStore</string>
               <string name="Source"><![CDATA[local Charm = require("../../../modules/Charm")
+local gameStore = require("../../shared/stores/gameStore")
 local types = require("../../shared/types")
 
-local getMessage, setMessage = Charm.signal(types.gameTemplate.message)
+local getAccount, setAccount = Charm.signal(types.accountTemplate)
+
+local getGameState = Charm.computed(function()
+	return gameStore.getState()
+end)
 
 return {
-	getMessage = getMessage,
-	setMessage = setMessage,
+	getAccount = getAccount,
+	setAccount = setAccount,
+	getGameState = getGameState,
+}
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="93">
+            <Properties>
+              <string name="Name">inputStore</string>
+              <string name="Source"><![CDATA[local UserInputService = game:GetService("UserInputService")
+
+local Charm = require("../../../modules/Charm")
+
+export type PreferredInput = "keyboard" | "gamepad" | "touch"
+
+local function getInitialInput(): PreferredInput
+	if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+		return "touch"
+	elseif UserInputService.GamepadEnabled then
+		return "gamepad"
+	end
+	return "keyboard"
+end
+
+local getPreferredInput, setPreferredInput = Charm.signal(getInitialInput())
+
+return {
+	getPreferredInput = getPreferredInput,
+	setPreferredInput = setPreferredInput,
 }
 ]]></string>
             </Properties>
           </Item>
         </Item>
-        <Item class="Folder" referent="85">
+        <Item class="Folder" referent="94">
           <Properties>
             <string name="Name">stories</string>
           </Properties>
         </Item>
-        <Item class="Folder" referent="86">
+        <Item class="Folder" referent="95">
           <Properties>
             <string name="Name">utils</string>
           </Properties>
+          <Item class="ModuleScript" referent="96">
+            <Properties>
+              <string name="Name">fonts</string>
+              <string name="Source"><![CDATA[return {
+	inter = {
+		semibold = Font.fromId(12187365364, Enum.FontWeight.SemiBold),
+		bold = Font.fromId(12187365364, Enum.FontWeight.Bold),
+		heavy = Font.fromId(12187365364, Enum.FontWeight.Heavy),
+	},
+}
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="97">
+            <Properties>
+              <string name="Name">px</string>
+              <string name="Source"><![CDATA[local Vide = require("../../../modules/Vide")
+
+local cleanup = Vide.cleanup
+local derive = Vide.derive
+local effect = Vide.effect
+local source = Vide.source
+
+local BASE_RESOLUTION = Vector2.new(1280, 720)
+local DOMINANT_AXIS = 0.5
+local SCALE_POINTS = { 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3 }
+
+local currentScale = source(1)
+
+--[[
+	Apply additional modifications to the scale factor here if desired.
+]]
+local function modifyScale(scale: number): number
+	-- Downscale slower than upscale
+	scale ^= 0.5
+
+	-- Snap to predefined scale points
+	for _, point in SCALE_POINTS do
+		if scale < point then
+			return point
+		end
+	end
+
+	return SCALE_POINTS[#SCALE_POINTS]
+end
+
+local function usePx()
+	local viewportSize = source(Vector2.new(0, 0))
+
+	local getConstrainedViewportSize = derive(function()
+		local viewport = viewportSize()
+		local constrainedAspectRatio = math.min(viewport.X / viewport.Y, 16 / 9)
+
+		return Vector2.new(viewport.Y * constrainedAspectRatio, viewport.Y)
+	end)
+
+	effect(function()
+		local viewport = getConstrainedViewportSize()
+		local scaleX = math.log(viewport.X / BASE_RESOLUTION.X, 2)
+		local scaleY = math.log(viewport.Y / BASE_RESOLUTION.Y, 2)
+
+		currentScale(modifyScale(2 ^ math.lerp(scaleX, scaleY, DOMINANT_AXIS)))
+	end)
+
+	cleanup(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+		viewportSize(workspace.CurrentCamera.ViewportSize)
+	end))
+
+	viewportSize(workspace.CurrentCamera.ViewportSize)
+end
+
+local function setScale(scale: number)
+	currentScale(scale)
+end
+
+local function px(x: number): () -> number
+	return function()
+		return math.round(x * currentScale())
+	end
+end
+
+local function raw(scaled: number): number
+	return math.round(scaled / currentScale())
+end
+
+local function scale(x: number): () -> number
+	return function()
+		return x * currentScale()
+	end
+end
+
+local function offset(x: number, y: number): () -> UDim2
+	return function()
+		return UDim2.fromOffset(px(x)(), px(y)())
+	end
+end
+
+local function udim2(xScale: number, xOffset: number, yScale: number, yOffset: number): () -> UDim2
+	return function()
+		return UDim2.new(xScale, px(xOffset)(), yScale, px(yOffset)())
+	end
+end
+
+local function udim(scale: number, offset: number): () -> UDim
+	return function()
+		return UDim.new(scale, px(offset)())
+	end
+end
+
+return setmetatable({
+	usePx = usePx,
+	setScale = setScale,
+	raw = raw,
+	scale = scale,
+	offset = offset,
+	udim2 = udim2,
+	udim = udim,
+}, {
+	__call = function(_, value: number): () -> number
+		return px(value)
+	end,
+})
+]]></string>
+            </Properties>
+          </Item>
         </Item>
       </Item>
-      <Item class="Folder" referent="87">
+      <Item class="Folder" referent="98">
         <Properties>
           <string name="Name">server</string>
         </Properties>
-        <Item class="Folder" referent="88">
+        <Item class="ModuleScript" referent="99">
           <Properties>
             <string name="Name">accounts</string>
+            <string name="Source"><![CDATA[local objects = require("../shared/utils/objects")
+local store = require("@self/store")
+local types = require("../shared/types")
+
+type Account = types.Account
+
+local function addGold(player: Player, amount: number)
+	return store:updateImmutable(player, function(account: Account)
+		return objects.join(account, {
+			gold = account.gold + amount,
+		})
+	end)
+end
+
+return {
+	addGold = addGold,
+}
+]]></string>
           </Properties>
+          <Item class="Script" referent="100">
+            <Properties>
+              <string name="Name">accounts</string>
+              <token name="RunContext">1</token>
+              <string name="Source"><![CDATA[local Players = game:GetService("Players")
+
+local accountStore = require("../stores/accountStore")
+local store = require("./store")
+
+Players.PlayerAdded:Connect(function(player)
+	store:load(player)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	store:unload(player)
+	accountStore.removeAccount(player.Name)
+end)
+
+game:BindToClose(function()
+	store:closeAsync()
+end)
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="101">
+            <Properties>
+              <string name="Name">schema</string>
+              <string name="Source"><![CDATA[local gt = require("../../../modules/gt")
+local types = require("../../shared/types")
+
+type Account = types.Account
+
+local accountSchema: Account = gt.table({
+	gold = gt.number(),
+})
+
+return gt.build(accountSchema)
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="102">
+            <Properties>
+              <string name="Name">store</string>
+              <string name="Source"><![CDATA[--!nocheck
+
+-- FIXME: Remove nocheck when createPlayerStore() no longer incorrectly reports
+-- that the code is too complex to typecheck
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local Lyra = require("../../../modules/Lyra")
+local accountStore = require("../stores/accountStore")
+local schema = require("./schema")
+local types = require("../../shared/types")
+
+type Account = types.Account
+
+local function onAccountChanged(key: string, account: Account)
+	local player = Players:GetPlayerByUserId(tonumber(key) :: number)
+	if player then
+		accountStore.setAccount(player.Name, account)
+	end
+end
+
+return Lyra.createPlayerStore({
+	name = "PlayerData",
+	template = types.accountTemplate,
+	schema = function(value)
+		local ok, reason = schema:matches(value)
+		return ok, tostring(reason)
+	end,
+	changedCallbacks = { onAccountChanged },
+	memoryStoreService = if RunService:IsStudio() then Lyra.MockMemoryStoreService.new() else nil,
+	dataStoreService = if RunService:IsStudio() then Lyra.MockDataStoreService.new() else nil,
+})
+]]></string>
+            </Properties>
+          </Item>
         </Item>
-        <Item class="Folder" referent="89">
+        <Item class="Folder" referent="103">
           <Properties>
             <string name="Name">gameplay</string>
           </Properties>
+          <Item class="Script" referent="104">
+            <Properties>
+              <string name="Name">guns</string>
+              <token name="RunContext">1</token>
+              <string name="Source"><![CDATA[local Players = game:GetService("Players")
+
+local guns = require("../../shared/constants/guns")
+local remotes = require("../../shared/remotes")
+
+local SERVER_SHOT_COOLDOWN_MS = 50
+local PROJECTILE_STEP_TIME = 0.1
+
+type PlayerState = {
+	lastShot: number,
+}
+
+local playerState: { [Player]: PlayerState } = {}
+
+local function ensureState(player: Player): PlayerState
+	local state = playerState[player]
+	if not state then
+		state = { lastShot = 0 }
+		playerState[player] = state
+	end
+	return state
+end
+
+local function playSound(name: string, gun: Tool)
+	local handle = gun:FindFirstChild("Handle")
+	if not handle then
+		return
+	end
+
+	local soundTemplate = handle:FindFirstChild(name)
+	if not soundTemplate or not soundTemplate:IsA("Sound") then
+		return
+	end
+
+	local sound = soundTemplate:Clone()
+	sound.Parent = handle
+	sound:Play()
+	sound.Ended:Once(function()
+		sound:Destroy()
+	end)
+end
+
+local function performRaycast(player: Player, origin: Vector3, direction: Vector3)
+	local rayParams = RaycastParams.new()
+	local filter: { Instance } = {}
+	if player.Character then
+		table.insert(filter, player.Character)
+	end
+	rayParams.FilterDescendantsInstances = filter
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.IgnoreWater = true
+
+	local rayResult = workspace:Raycast(origin, direction, rayParams)
+	local hitPos = rayResult and rayResult.Position or (origin + direction)
+
+	return hitPos, rayResult
+end
+
+local function applyDamage(player: Player, gunStats: guns.GunInfo, rayResult: RaycastResult?)
+	if not rayResult then
+		return
+	end
+
+	local hitPart = rayResult.Instance
+	local targetModel = hitPart and hitPart:FindFirstAncestorOfClass("Model")
+	local humanoid = targetModel and targetModel:FindFirstChildOfClass("Humanoid")
+
+	if humanoid and humanoid.Parent ~= player.Character then
+		local damage = gunStats.damage
+		if hitPart.Name == "Head" then
+			damage *= gunStats.headshotMultiplier
+		end
+		humanoid:TakeDamage(damage)
+	end
+end
+
+local function replicateHitscan(origin: Vector3, hitPos: Vector3)
+	remotes.gunEffect:FireAllClients({
+		effect = "BulletTrail",
+		origin = origin,
+		hitPos = hitPos,
+	})
+end
+
+local function replicateProjectile(origin: Vector3, direction: Vector3, bulletSpeed: number, range: number)
+	remotes.gunEffect:FireAllClients({
+		effect = "BulletShot",
+		origin = origin,
+		direction = direction,
+		bulletSpeed = bulletSpeed,
+		range = range,
+	})
+end
+
+local function handleProjectileShot(player: Player, gunStats: guns.GunInfo, origin: Vector3, direction: Vector3)
+	local bulletSpeed = gunStats.bulletSpeed :: number
+	local stepDistance = bulletSpeed * PROJECTILE_STEP_TIME
+	local traveled = 0
+	local position = origin
+
+	replicateProjectile(origin, direction, bulletSpeed, gunStats.range)
+
+	while traveled < gunStats.range do
+		local nextDir = direction * stepDistance
+		local _, rayResult = performRaycast(player, position, nextDir)
+
+		if rayResult then
+			applyDamage(player, gunStats, rayResult)
+			break
+		end
+
+		position += nextDir
+		traveled += stepDistance
+		task.wait(PROJECTILE_STEP_TIME)
+	end
+end
+
+local function handleHitscanShot(
+	player: Player,
+	gunStats: guns.GunInfo,
+	origin: Vector3,
+	direction: Vector3,
+	distanceToTarget: number
+)
+	local rayDir = direction * math.min(distanceToTarget, gunStats.range)
+	local hitPos, rayResult = performRaycast(player, origin, rayDir)
+
+	applyDamage(player, gunStats, rayResult)
+	replicateHitscan(origin, hitPos)
+end
+
+local function isToolEquippedByPlayer(player: Player, tool: Tool): boolean
+	local character = player.Character
+	return character ~= nil and tool:IsDescendantOf(character)
+end
+
+remotes.shootGun.OnServerEvent:Connect(function(player: Player, tool: Tool, origin: Vector3, targetPos: Vector3)
+	if not tool or not origin or not targetPos then
+		return
+	end
+
+	if not isToolEquippedByPlayer(player, tool) then
+		return
+	end
+
+	local gunStats = guns.getGunByName(tool.Name)
+	if not gunStats then
+		return
+	end
+
+	local state = ensureState(player)
+	local now = tick() * 1000
+	if now - state.lastShot < SERVER_SHOT_COOLDOWN_MS then
+		return
+	end
+	state.lastShot = now
+
+	playSound("Shoot", tool)
+
+	local direction = targetPos - origin
+	local distanceToTarget = direction.Magnitude
+	if distanceToTarget <= 0.001 then
+		return
+	end
+
+	local dirUnit = direction.Unit
+
+	if gunStats.bulletSpeed then
+		handleProjectileShot(player, gunStats, origin, dirUnit)
+	else
+		handleHitscanShot(player, gunStats, origin, dirUnit, distanceToTarget)
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	playerState[player] = nil
+end)
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="Script" referent="105">
+            <Properties>
+              <string name="Name">inventory</string>
+              <token name="RunContext">1</token>
+              <string name="Source"><![CDATA[local ServerStorage = game:GetService("ServerStorage")
+
+local attribute = require("../../shared/utils/attribute")
+local guns = require("../../shared/constants/guns")
+local observers = require("../../shared/utils/observers")
+
+local gunIdAttribute = attribute<<string?>>("GunId")
+
+local function cloneGunTool(gunId: string): Tool?
+	local gun = guns.getGun(gunId)
+	local gunTools = ServerStorage:WaitForChild("GunTools")
+	local template = gunTools:FindFirstChild(gun.name)
+
+	if not template or not template:IsA("Tool") then
+		warn(`Missing gun tool template in ServerStorage.GunTools: {gun.name}`)
+		return nil
+	end
+
+	local tool = template:Clone()
+	gunIdAttribute.set(tool, gunId)
+	return tool
+end
+
+observers.observePlayers(function(player)
+	return observers.observeChildWhichIsA(player, "Backpack", function(backpack: Backpack)
+		local tools: { Tool } = {}
+
+		for _, gunId in guns.starterGunIds do
+			local tool = cloneGunTool(gunId)
+			if tool then
+				tool.Parent = backpack
+				table.insert(tools, tool)
+			end
+		end
+
+		return function()
+			for _, tool in tools do
+				tool:Destroy()
+			end
+		end
+	end)
+end)
+]]></string>
+            </Properties>
+          </Item>
         </Item>
-        <Item class="Script" referent="90">
+        <Item class="Script" referent="106">
           <Properties>
             <string name="Name">lib</string>
             <token name="RunContext">1</token>
@@ -19537,19 +20643,67 @@ end
 source.Parent = nil
 ]]></string>
           </Properties>
-          <Item class="Script" referent="91">
+          <Item class="Script" referent="107">
+            <Properties>
+              <string name="Name">leaderstats</string>
+              <token name="RunContext">1</token>
+              <string name="Source"><![CDATA[local Players = game:GetService("Players")
+
+local Charm = require("../../../modules/Charm")
+local accountStore = require("../stores/accountStore")
+local types = require("../../shared/types")
+
+type Account = types.Account
+
+Charm.observe(accountStore.getAccounts, function(initialAccount: Account, username: string)
+	local player = Players:FindFirstChild(username) :: Player?
+
+	if not player then
+		return
+	end
+
+	local getAccount = Charm.computed(function(prevAccount: Account?)
+		return accountStore.getAccount(username) or prevAccount or initialAccount
+	end)
+
+	local leaderstats = Instance.new("Folder")
+	leaderstats.Name = "leaderstats"
+	leaderstats.Parent = player
+
+	local gold = Instance.new("IntValue")
+	gold.Name = "Gold"
+	gold.Parent = leaderstats
+
+	Charm.effect(function()
+		local account = getAccount()
+		gold.Value = account.gold
+	end)
+
+	return function()
+		leaderstats:Destroy()
+	end
+end)
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="Script" referent="108">
             <Properties>
               <string name="Name">sync</string>
               <token name="RunContext">1</token>
               <string name="Source"><![CDATA[local Players = game:GetService("Players")
 
+local Charm = require("../../../modules/Charm")
 local CharmSync = require("../../../modules/CharmSync")
+local accountStore = require("../stores/accountStore")
 local gameStore = require("../../shared/stores/gameStore")
 local remotes = require("../../shared/remotes")
 
 local function onPlayerAdded(player: Player)
 	CharmSync.server.addSignalsToClient(player, {
 		game = gameStore.getState,
+		[`account-{player.Name}`] = Charm.computed(function()
+			return accountStore.getAccount(player.Name)
+		end),
 	})
 end
 
@@ -19571,22 +20725,199 @@ end
             </Properties>
           </Item>
         </Item>
-        <Item class="Folder" referent="92">
+        <Item class="Folder" referent="109">
           <Properties>
             <string name="Name">stores</string>
           </Properties>
+          <Item class="ModuleScript" referent="110">
+            <Properties>
+              <string name="Name">accountStore</string>
+              <string name="Source"><![CDATA[local Charm = require("../../../modules/Charm")
+local objects = require("../../shared/utils/objects")
+local types = require("../../shared/types")
+
+export type Account = types.Account
+
+type Accounts = {
+	[string]: Account,
+}
+
+local getAccounts, setAccounts = Charm.signal({} :: Accounts)
+
+local function getAccount(username: string): Account?
+	return getAccounts()[username]
+end
+
+local function setAccount(username: string, account: Account)
+	setAccounts(function(state: Accounts)
+		return objects.set(state, username, account)
+	end)
+end
+
+local function removeAccount(username: string)
+	setAccounts(function(state: Accounts)
+		return objects.delete(state, username)
+	end)
+end
+
+return {
+	getAccounts = getAccounts,
+	getAccount = getAccount,
+	setAccount = setAccount,
+	removeAccount = removeAccount,
+}
+]]></string>
+            </Properties>
+          </Item>
         </Item>
       </Item>
-      <Item class="Folder" referent="93">
+      <Item class="Folder" referent="111">
         <Properties>
           <string name="Name">shared</string>
         </Properties>
-        <Item class="Folder" referent="94">
+        <Item class="ModuleScript" referent="112">
           <Properties>
             <string name="Name">constants</string>
+            <string name="Source"><![CDATA[return table.freeze({
+	TICK_RATE = 1 / 30,
+})
+]]></string>
           </Properties>
+          <Item class="ModuleScript" referent="113">
+            <Properties>
+              <string name="Name">bulletAssets</string>
+              <string name="Source"><![CDATA[local function createBullet(): Part
+	local bullet = Instance.new("Part")
+	bullet.Name = "Bullet"
+	bullet.Shape = Enum.PartType.Block
+	bullet.Size = Vector3.new(0.1, 0.1, 6)
+	bullet.Color = Color3.fromRGB(254, 183, 24)
+	bullet.Material = Enum.Material.Neon
+	bullet.Anchored = true
+	bullet.CanCollide = false
+	bullet.CanQuery = false
+	bullet.CastShadow = false
+	return bullet
+end
+
+local function createBulletTrail(): Part
+	local trail = Instance.new("Part")
+	trail.Name = "BulletTrail"
+	trail.Shape = Enum.PartType.Block
+	trail.Size = Vector3.new(0.1, 0.1, 20.9)
+	trail.Color = Color3.fromRGB(255, 255, 255)
+	trail.Material = Enum.Material.Neon
+	trail.Anchored = true
+	trail.CanCollide = false
+	trail.CanQuery = false
+	trail.CastShadow = false
+	return trail
+end
+
+return {
+	createBullet = createBullet,
+	createBulletTrail = createBulletTrail,
+}
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="114">
+            <Properties>
+              <string name="Name">guns</string>
+              <string name="Source"><![CDATA[local attribute = require("../utils/attribute")
+
+export type GunInfo = {
+	name: string,
+	description: string,
+	damage: number,
+	headshotMultiplier: number,
+	range: number,
+	bulletSpeed: number?,
+	automatic: boolean,
+	fireRate: number,
+	maxAmmo: number,
+	reloadTime: number,
+}
+
+local gunsById: { [string]: GunInfo } = {
+	pistol = {
+		name = "Pistol",
+		description = "A reliable sidearm for close-range encounters.",
+		damage = 15,
+		headshotMultiplier = 2,
+		range = 200,
+		bulletSpeed = 150,
+		automatic = false,
+		fireRate = 10,
+		maxAmmo = 30,
+		reloadTime = 1.8,
+	},
+	mp4 = {
+		name = "MP4",
+		description = "A compact SMG with a high fire rate.",
+		damage = 12,
+		headshotMultiplier = 1.5,
+		range = 150,
+		bulletSpeed = 200,
+		automatic = true,
+		fireRate = 12,
+		maxAmmo = 40,
+		reloadTime = 2.2,
+	},
+	ak47 = {
+		name = "AK-47",
+		description = "A powerful rifle with strong damage at range.",
+		damage = 22,
+		headshotMultiplier = 2,
+		range = 300,
+		bulletSpeed = nil,
+		automatic = true,
+		fireRate = 6,
+		maxAmmo = 30,
+		reloadTime = 2.5,
+	},
+}
+
+local starterGunIds = { "pistol", "mp4", "ak47" }
+
+local gunIdAttribute = attribute<<string?>>("GunId")
+
+local function getGun(gunId: string): GunInfo
+	return assert(gunsById[gunId], `Failed to get gun {gunId}`)
+end
+
+local function getGunByName(toolName: string): GunInfo?
+	for _, gun in gunsById do
+		if gun.name == toolName then
+			return gun
+		end
+	end
+	return nil
+end
+
+local function getGunIdFromTool(tool: Tool): string?
+	local gunId = gunIdAttribute.get(tool)
+	return if type(gunId) == "string" and gunsById[gunId] then gunId else nil
+end
+
+local function getGunIdFromCharacter(character: Model): string?
+	local tool = character and character:FindFirstChildWhichIsA("Tool")
+	return tool and getGunIdFromTool(tool)
+end
+
+return {
+	gunsById = gunsById,
+	starterGunIds = starterGunIds,
+	getGun = getGun,
+	getGunByName = getGunByName,
+	getGunIdFromTool = getGunIdFromTool,
+	getGunIdFromCharacter = getGunIdFromCharacter,
+}
+]]></string>
+            </Properties>
+          </Item>
         </Item>
-        <Item class="ModuleScript" referent="95">
+        <Item class="ModuleScript" referent="115">
           <Properties>
             <string name="Name">remotes</string>
             <string name="Source"><![CDATA[local gt = require("../../modules/gt")
@@ -19595,10 +20926,12 @@ local lib = require("@self/lib")
 return {
 	assert = lib.assert,
 	patch = lib.event(gt.anyTable()),
+	shootGun = lib.event(gt.isA.Tool(), gt.Vector3(), gt.Vector3()),
+	gunEffect = lib.event(gt.anyTable()),
 }
 ]]></string>
           </Properties>
-          <Item class="ModuleScript" referent="96">
+          <Item class="ModuleScript" referent="116">
             <Properties>
               <string name="Name">lib</string>
               <string name="Source"><![CDATA[--[[
@@ -19709,11 +21042,11 @@ return {
             </Properties>
           </Item>
         </Item>
-        <Item class="Folder" referent="97">
+        <Item class="Folder" referent="117">
           <Properties>
             <string name="Name">stores</string>
           </Properties>
-          <Item class="ModuleScript" referent="98">
+          <Item class="ModuleScript" referent="118">
             <Properties>
               <string name="Name">gameStore</string>
               <string name="Source"><![CDATA[local Charm = require("../../../modules/Charm")
@@ -19729,7 +21062,7 @@ return {
             </Properties>
           </Item>
         </Item>
-        <Item class="ModuleScript" referent="99">
+        <Item class="ModuleScript" referent="119">
           <Properties>
             <string name="Name">tests</string>
             <string name="Source"><![CDATA[local test = require("../../tests/test")
@@ -19741,18 +21074,19 @@ end)
 return {}
 ]]></string>
           </Properties>
-          <Item class="ModuleScript" referent="100">
+          <Item class="ModuleScript" referent="120">
             <Properties>
               <string name="Name">example.spec</string>
-              <string name="Source"><![CDATA[local test = require("@std/test")
+              <string name="Source"><![CDATA[local assert = require("@std/test/assert")
+local test = require("@std/test")
 
-test("should add numbers", function()
-	test.assertEqual(1 + 1, 2)
+test.case("should add numbers", function()
+	assert.eq(1 + 1, 2)
 end)
 ]]></string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="101">
+          <Item class="ModuleScript" referent="121">
             <Properties>
               <string name="Name">example.test</string>
               <string name="Source"><![CDATA[local test = require("../../../tests/test")
@@ -19768,11 +21102,27 @@ return {}
             </Properties>
           </Item>
         </Item>
-        <Item class="ModuleScript" referent="102">
+        <Item class="ModuleScript" referent="122">
           <Properties>
             <string name="Name">types</string>
-            <string name="Source"><![CDATA[export type GameState = {
+            <string name="Source"><![CDATA[export type function Writable(ty: type): type
+	local result = types.copy(ty)
+	for key, value in result:properties() do
+		result:setproperty(key, value.read)
+	end
+	return result
+end
+
+export type Account = {
+	read gold: number,
+}
+
+export type GameState = {
 	read message: string,
+}
+
+local accountTemplate: Account = {
+	gold = 0,
 }
 
 local gameTemplate: GameState = {
@@ -19780,19 +21130,312 @@ local gameTemplate: GameState = {
 }
 
 return {
+	accountTemplate = accountTemplate,
 	gameTemplate = gameTemplate,
 }
 ]]></string>
           </Properties>
         </Item>
-        <Item class="Folder" referent="103">
+        <Item class="Folder" referent="123">
           <Properties>
             <string name="Name">utils</string>
           </Properties>
+          <Item class="ModuleScript" referent="124">
+            <Properties>
+              <string name="Name">attribute</string>
+              <string name="Source"><![CDATA[type Attribute<T> = {
+	name: string,
+	get: (instance: Instance) -> T,
+	set: (instance: Instance, value: T) -> (),
+}
+
+local function attribute<T>(name: string, defaultValue: T?): Attribute<T>
+	local function getAttribute(instance: Instance): T
+		local value = instance:GetAttribute(name)
+		return if value ~= nil then value else defaultValue
+	end
+
+	local function setAttribute(instance: Instance, value: T)
+		instance:SetAttribute(name, value)
+	end
+
+	return {
+		name = name,
+		get = getAttribute,
+		set = setAttribute,
+	}
+end
+
+return attribute
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="125">
+            <Properties>
+              <string name="Name">objects</string>
+              <string name="Source"><![CDATA[type function NonNilable(ty: type): type
+	if not ty:is("union") then
+		return ty
+	end
+	local union = nil
+	for _, member in ty:components() do
+		if not member:is("nil") then
+			union = if union then types.unionof(union, member) else member
+		end
+	end
+	return union or ty
+end
+
+type function Partial(ty: type): type
+	local result = types.copy(ty)
+	for key, property in ty:properties() do
+		if property.read then
+			result:setreadproperty(key, types.unionof(property.read, types.singleton(nil)))
+		end
+		if property.write then
+			result:setwriteproperty(key, types.unionof(property.write, types.singleton(nil)))
+		end
+	end
+	return result
+end
+
+local function map<K, VI, VO>(object: { [K]: VI }, fn: (NonNilable<VI>, K) -> VO): { [K]: VO }
+	local result: { [K]: VO } = {}
+	for key, value in object do
+		result[key] = fn(value, key)
+	end
+	return result
+end
+
+local function filter<K, V>(object: { [K]: V }, predicate: (NonNilable<V>, K) -> boolean): { [K]: V }
+	local result: { [K]: V } = {}
+	for key, value in object do
+		if predicate(value, key) then
+			result[key] = value
+		end
+	end
+	return result
+end
+
+local function keys<K>(object: { [K]: any }): { K }
+	local result: { K } = {}
+	for key in object do
+		table.insert(result, key)
+	end
+	return result
+end
+
+local function set<T, K>(object: T & {}, key: K & keyof<T>, value: index<T, K>): T
+	if object[key] ~= value then
+		object = table.clone(object)
+		object[key] = value
+	end
+	return object
+end
+
+local function delete<T, K>(object: T & {}, key: K & keyof<T>): T
+	if object[key] ~= nil then
+		object = table.clone(object)
+		object[key] = nil
+	end
+	return object
+end
+
+local function update<T, K>(object: T & {}, key: K & keyof<T>, fn: (NonNilable<index<T, K>>) -> index<T, K>?): T
+	local value: unknown = object[key]
+	if value ~= nil then
+		local newValue = fn(value :: index<T, K>)
+		if newValue ~= value then
+			object = table.clone(object)
+			object[key] = newValue
+		end
+	end
+	return object
+end
+
+local function join<T>(object: T & {}, source: Partial<T>?): T
+	if not source then
+		return object
+	end
+	local result = object
+	for key, value in source :: { [any]: any } do
+		if result[key] ~= value then
+			if result == object then
+				result = table.clone(object) :: never
+			end
+			result[key] = value
+		end
+	end
+	return result
+end
+
+return {
+	map = map,
+	filter = filter,
+	keys = keys,
+	set = set,
+	delete = delete,
+	update = update,
+	join = join,
+}
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="126">
+            <Properties>
+              <string name="Name">observers</string>
+              <string name="Source"><![CDATA[local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+
+type Cleanup = () -> ()
+
+export type Observer<Key> = {
+	add: <Args...>(instance: Key, factory: (Args...) -> Cleanup?, Args...) -> (),
+	remove: (instance: Key) -> (),
+	clear: () -> (),
+}
+
+local function noop() end
+
+local function createObserver<Key>(setup: (Observer<Key>) -> Cleanup): Cleanup
+	local cleanups: { [Key]: Cleanup } = {}
+
+	local function remove(key: Key)
+		local cleanup = cleanups[key]
+		if cleanup then
+			cleanups[key] = nil
+			cleanup()
+		end
+	end
+
+	local function add<Args...>(key: Key, factory: (Args...) -> Cleanup?, ...: Args...)
+		remove(key)
+		cleanups[key] = factory(...) or noop
+	end
+
+	local function clear()
+		for key, cleanup in cleanups do
+			cleanup()
+			cleanups[key] = nil
+		end
+	end
+
+	local stop = setup({
+		add = add,
+		remove = remove,
+		clear = clear,
+	})
+
+	return function()
+		stop()
+		clear()
+	end
+end
+
+local function observeTag<T>(tag: string, callback: (T) -> Cleanup?): Cleanup
+	return createObserver(function(observer: Observer<any>)
+		local instanceAdded = CollectionService:GetInstanceAddedSignal(tag):Connect(function(instance: any)
+			observer.add(instance, callback, instance)
+		end)
+
+		local instanceRemoved = CollectionService:GetInstanceRemovedSignal(tag):Connect(function(instance: any)
+			observer.remove(instance)
+		end)
+
+		for _, instance: any in CollectionService:GetTagged(tag) do
+			observer.add(instance, callback, instance)
+		end
+
+		return function()
+			instanceAdded:Disconnect()
+			instanceRemoved:Disconnect()
+		end
+	end)
+end
+
+local function observePlayers(callback: (Player) -> Cleanup?): Cleanup
+	return createObserver(function(observer: Observer<Player>)
+		local playerAdded = Players.PlayerAdded:Connect(function(player)
+			observer.add(player, callback, player)
+		end)
+
+		local playerRemoving = Players.PlayerRemoving:Connect(function(player)
+			observer.remove(player)
+		end)
+
+		for _, player in Players:GetPlayers() do
+			observer.add(player, callback, player)
+		end
+
+		return function()
+			playerAdded:Disconnect()
+			playerRemoving:Disconnect()
+		end
+	end)
+end
+
+local function observeCharacter(player: Player, callback: (Model) -> Cleanup?): Cleanup
+	return createObserver(function(observer: Observer<"character">)
+		local characterAdded = player.CharacterAdded:Connect(function(character)
+			observer.add("character", callback, character)
+		end)
+
+		local characterRemoving = player.CharacterRemoving:Connect(function()
+			observer.remove("character")
+		end)
+
+		if player.Character then
+			observer.add("character", callback, player.Character)
+		end
+
+		return function()
+			characterAdded:Disconnect()
+			characterRemoving:Disconnect()
+		end
+	end)
+end
+
+local function observeChildWhichIsA<T>(parent: Instance, className: string, callback: (T) -> Cleanup?): Cleanup
+	return createObserver(function(observer: Observer<any>)
+		local childAdded = parent.ChildAdded:Connect(function(child)
+			if child:IsA(className) then
+				observer.add(child, callback, child)
+			end
+		end)
+
+		local childRemoved = parent.ChildRemoved:Connect(function(child)
+			if child:IsA(className) then
+				observer.remove(child)
+			end
+		end)
+
+		for _, child in parent:GetChildren() do
+			if child:IsA(className) then
+				observer.add(child, callback, child)
+			end
+		end
+
+		return function()
+			childAdded:Disconnect()
+			childRemoved:Disconnect()
+		end
+	end)
+end
+
+return {
+	createObserver = createObserver,
+	observeTag = observeTag,
+	observeCharacter = observeCharacter,
+	observePlayers = observePlayers,
+	observeChildWhichIsA = observeChildWhichIsA,
+}
+]]></string>
+            </Properties>
+          </Item>
         </Item>
       </Item>
     </Item>
-    <Item class="ModuleScript" referent="104">
+    <Item class="ModuleScript" referent="127">
       <Properties>
         <string name="Name">tests</string>
         <string name="Source"><![CDATA[local test = require("@self/test")
@@ -19806,7 +21449,7 @@ test.finish()
 return {}
 ]]></string>
       </Properties>
-      <Item class="ModuleScript" referent="105">
+      <Item class="ModuleScript" referent="128">
         <Properties>
           <string name="Name">test</string>
           <string name="Source"><![CDATA[type Config = {
@@ -20270,7 +21913,7 @@ return setmetatable({
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="106">
+      <Item class="Script" referent="129">
         <Properties>
           <string name="Name">tests</string>
           <token name="RunContext">1</token>
@@ -20281,6 +21924,133 @@ if RunService:IsRunMode() then
 end
 ]]></string>
         </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerStorage" referent="130">
+    <Properties>
+      <string name="Name">ServerStorage</string>
+    </Properties>
+    <Item class="Folder" referent="131">
+      <Properties>
+        <string name="Name">GunTools</string>
+      </Properties>
+      <Item class="Tool" referent="132">
+        <Properties>
+          <string name="Name">AK-47</string>
+          <bool name="CanBeDropped">false</bool>
+          <bool name="NeedsPivotMigration">false</bool>
+          <bool name="RequiresHandle">true</bool>
+          <string name="ToolTip">AK-47</string>
+        </Properties>
+        <Item class="Part" referent="133">
+          <Properties>
+            <string name="Name">Handle</string>
+            <bool name="CanCollide">false</bool>
+            <string name="Name">Handle</string>
+            <Vector3 name="size">
+              <X>0.35</X>
+              <Y>0.5</Y>
+              <Z>2.2</Z>
+            </Vector3>
+          </Properties>
+        </Item>
+        <Item class="Part" referent="134">
+          <Properties>
+            <string name="Name">ShootPart</string>
+            <bool name="CanCollide">false</bool>
+            <string name="Name">ShootPart</string>
+            <Vector3 name="Position">
+              <X>0</X>
+              <Y>0</Y>
+              <Z>-2.4</Z>
+            </Vector3>
+            <Vector3 name="size">
+              <X>0.1</X>
+              <Y>0.1</Y>
+              <Z>0.1</Z>
+            </Vector3>
+            <float name="Transparency">1</float>
+          </Properties>
+        </Item>
+      </Item>
+      <Item class="Tool" referent="135">
+        <Properties>
+          <string name="Name">MP4</string>
+          <bool name="CanBeDropped">false</bool>
+          <bool name="NeedsPivotMigration">false</bool>
+          <bool name="RequiresHandle">true</bool>
+          <string name="ToolTip">MP4</string>
+        </Properties>
+        <Item class="Part" referent="136">
+          <Properties>
+            <string name="Name">Handle</string>
+            <bool name="CanCollide">false</bool>
+            <string name="Name">Handle</string>
+            <Vector3 name="size">
+              <X>0.35</X>
+              <Y>0.45</Y>
+              <Z>1.4</Z>
+            </Vector3>
+          </Properties>
+        </Item>
+        <Item class="Part" referent="137">
+          <Properties>
+            <string name="Name">ShootPart</string>
+            <bool name="CanCollide">false</bool>
+            <string name="Name">ShootPart</string>
+            <Vector3 name="Position">
+              <X>0</X>
+              <Y>0</Y>
+              <Z>-1.8</Z>
+            </Vector3>
+            <Vector3 name="size">
+              <X>0.1</X>
+              <Y>0.1</Y>
+              <Z>0.1</Z>
+            </Vector3>
+            <float name="Transparency">1</float>
+          </Properties>
+        </Item>
+      </Item>
+      <Item class="Tool" referent="138">
+        <Properties>
+          <string name="Name">Pistol</string>
+          <bool name="CanBeDropped">false</bool>
+          <bool name="NeedsPivotMigration">false</bool>
+          <bool name="RequiresHandle">true</bool>
+          <string name="ToolTip">Pistol</string>
+        </Properties>
+        <Item class="Part" referent="139">
+          <Properties>
+            <string name="Name">Handle</string>
+            <bool name="CanCollide">false</bool>
+            <string name="Name">Handle</string>
+            <Vector3 name="size">
+              <X>0.3</X>
+              <Y>0.5</Y>
+              <Z>0.8</Z>
+            </Vector3>
+          </Properties>
+        </Item>
+        <Item class="Part" referent="140">
+          <Properties>
+            <string name="Name">ShootPart</string>
+            <bool name="CanCollide">false</bool>
+            <string name="Name">ShootPart</string>
+            <Vector3 name="Position">
+              <X>0</X>
+              <Y>0</Y>
+              <Z>-1.2</Z>
+            </Vector3>
+            <Vector3 name="size">
+              <X>0.1</X>
+              <Y>0.1</Y>
+              <Z>0.1</Z>
+            </Vector3>
+            <float name="Transparency">1</float>
+          </Properties>
+        </Item>
       </Item>
     </Item>
   </Item>
