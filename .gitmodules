@@ -17,3 +17,6 @@
 [submodule "tests/test"]
 	path = tests/test
 	url = https://gist.github.com/littensy/fa9afcc5d66d25e86538634982be4ee4
+[submodule "modules/submodules/boattween"]
+	path = modules/submodules/boattween
+	url = https://github.com/boatbomber/BoatTween

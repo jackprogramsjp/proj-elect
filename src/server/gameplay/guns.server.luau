@@ -4,6 +4,7 @@ local guns = require("../../shared/constants/guns")
 local remotes = require("../../shared/remotes")
 
 local SERVER_FIRE_RATE_LIMIT = 50
+local HITSCAN_VISUAL_SPEED = 1200
 
 type PlayerState = {
 	lastShot: number,
@@ -66,6 +67,16 @@ local function applyDamage(player: Player, gunStats: guns.GunInfo, rayResult: Ra
 	end
 end
 
+local function fireLightningShot(origin: Vector3, direction: Vector3, bulletSpeed: number, range: number)
+	remotes.gunEffect:FireAllClients({
+		effect = "LightningShot",
+		origin = origin,
+		direction = direction,
+		bulletSpeed = bulletSpeed,
+		range = range,
+	})
+end
+
 remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origin: Vector3, targetPos: Vector3)
 	if not gun or not origin or not targetPos then
 		return
@@ -94,15 +105,11 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 	local dirUnit = direction.Unit
 
 	if not gunStats.bulletSpeed then
-		local rayDir = dirUnit * math.min(distanceToTarget, gunStats.range)
-		local hitPos, rayResult = performRaycast(player, origin, rayDir)
+		local travelRange = math.min(distanceToTarget, gunStats.range)
+		local rayDir = dirUnit * travelRange
+		local _, rayResult = performRaycast(player, origin, rayDir)
 		applyDamage(player, gunStats, rayResult)
-
-		remotes.gunEffect:FireAllClients({
-			effect = "BulletTrail",
-			origin = origin,
-			hitPos = hitPos,
-		})
+		fireLightningShot(origin, dirUnit, HITSCAN_VISUAL_SPEED, travelRange)
 		return
 	end
 
@@ -112,13 +119,7 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 	local traveled = 0
 	local position = origin
 
-	remotes.gunEffect:FireAllClients({
-		effect = "BulletShot",
-		origin = position,
-		direction = dirUnit,
-		bulletSpeed = bulletSpeed,
-		range = gunStats.range,
-	})
+	fireLightningShot(origin, dirUnit, bulletSpeed, gunStats.range)
 
 	while traveled < gunStats.range do
 		local nextDir = dirUnit * stepDistance
@@ -131,7 +132,6 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 
 		position += nextDir
 		traveled += stepDistance
-		task.wait(stepTime)
 	end
 end)
 
