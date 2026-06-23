@@ -10,6 +10,7 @@
     "Promise": { "$path": "./promise/lib" },
     "t": { "$path": "./t.luau" },
     "Vide": { "$path": "./vide/src" },
-    "VideCharm": { "$path": "./charm/packages/vide-charm/src" }
+    "VideCharm": { "$path": "./charm/packages/vide-charm/src" },
+    "BoatTween": { "$path": "./boattween/src" }
   }
 }
