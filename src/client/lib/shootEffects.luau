@@ -17,7 +17,8 @@ local BULLET_LIGHTNING: LightningModule.LightningInputData = {
 
 local function performRaycast(origin: Vector3, direction: Vector3)
 	local rayParams = RaycastParams.new()
-	rayParams.FilterDescendantsInstances = { player.Character :: Instance }
+	local character = player.Character
+	rayParams.FilterDescendantsInstances = if character then { character } else {}
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
 	rayParams.IgnoreWater = true
 
