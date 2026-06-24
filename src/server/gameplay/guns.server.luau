@@ -36,9 +36,18 @@ local function playSound(name: string, gun: Tool)
 	sound:Destroy()
 end
 
+local function getRaycastFilter(player: Player): { Instance }
+	local character = player.Character
+	if not character then
+		return {}
+	end
+
+	return { character }
+end
+
 local function performRaycast(player: Player, origin: Vector3, direction: Vector3)
 	local rayParams = RaycastParams.new()
-	rayParams.FilterDescendantsInstances = { player.Character :: Instance }
+	rayParams.FilterDescendantsInstances = getRaycastFilter(player)
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
 	rayParams.IgnoreWater = true
 
@@ -70,8 +79,41 @@ local function fireGunEffect(payload: { [string]: any })
 	remotes.gunEffect:FireAllClients(payload)
 end
 
-remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origin: Vector3, targetPos: Vector3)
-	if not gun or not origin or not targetPos then
+local function getEquippedGun(player: Player, gun: any): Tool?
+	if typeof(gun) ~= "Instance" or not gun:IsA("Tool") then
+		return nil
+	end
+
+	local character = player.Character
+	if not character or not gun:IsDescendantOf(character) then
+		return nil
+	end
+
+	return gun
+end
+
+local function getShootOrigin(gun: Tool): Vector3?
+	local shootPart = gun:FindFirstChild("ShootPart")
+	if not shootPart or not shootPart:IsA("BasePart") then
+		return nil
+	end
+
+	return shootPart.Position
+end
+
+remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: any, _clientOrigin: any, targetPos: any)
+	local equippedGun = getEquippedGun(player, gun)
+	if not equippedGun or typeof(targetPos) ~= "Vector3" then
+		return
+	end
+
+	local origin = getShootOrigin(equippedGun)
+	if not origin then
+		return
+	end
+
+	local gunStats = guns.getGunByName(equippedGun.Name)
+	if not gunStats then
 		return
 	end
 
@@ -82,12 +124,7 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 	end
 	st.lastShot = now
 
-	playSound("Shoot", gun)
-
-	local gunStats = guns.getGunByName(gun.Name)
-	if not gunStats then
-		return
-	end
+	playSound("Shoot", equippedGun)
 
 	local direction = targetPos - origin
 	local distanceToTarget = direction.Magnitude
