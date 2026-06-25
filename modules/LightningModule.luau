@@ -129,14 +129,13 @@ function LightningModule.Cast(data: LightningData)
 end
 
 function LightningModule.Line(p1: Vector3, p2: Vector3, inputData: LightningInputData, segments: number, casts: number)
-	local data = table.clone(inputData) :: LightningData
-	
 	if not segments then
 		segments = (p1 - p2).Magnitude / 4
 	end
 	
 	for i = 1, casts do
 		task.spawn(function()
+			local data = table.clone(inputData) :: LightningData
 			local points = {}
 			local dist = 0
 			local base = RNG:NextNumber() * 300
