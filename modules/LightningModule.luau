@@ -129,7 +129,7 @@ function LightningModule.Cast(data: LightningData)
 end
 
 function LightningModule.Line(p1: Vector3, p2: Vector3, inputData: LightningInputData, segments: number, casts: number)
-	local data = inputData :: LightningData
+	local data = table.clone(inputData) :: LightningData
 	
 	if not segments then
 		segments = (p1 - p2).Magnitude / 4
