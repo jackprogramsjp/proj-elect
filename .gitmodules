@@ -20,3 +20,9 @@
 [submodule "modules/submodules/boattween"]
 	path = modules/submodules/boattween
 	url = https://github.com/boatbomber/BoatTween
+[submodule "modules/submodules/satchel"]
+	path = modules/submodules/satchel
+	url = https://github.com/ryanlua/satchel
+[submodule "modules/submodules/topbarplus"]
+	path = modules/submodules/topbarplus
+	url = https://github.com/1ForeverHD/TopbarPlus
