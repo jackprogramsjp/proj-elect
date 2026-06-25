@@ -1,6 +1,6 @@
 {
   "name": "submodules",
-  "globIgnorePaths": ["**/__tests__"],
+  "globIgnorePaths": ["**/__tests__", "satchel/src/Attribution.client.luau"],
   "tree": {
     "$className": "Folder",
     "Charm": { "$path": "./charm/packages/charm/src" },
@@ -11,6 +11,13 @@
     "t": { "$path": "./t.luau" },
     "Vide": { "$path": "./vide/src" },
     "VideCharm": { "$path": "./charm/packages/vide-charm/src" },
-    "BoatTween": { "$path": "./boattween/src" }
+    "BoatTween": { "$path": "./boattween/src" },
+    "Satchel": {
+      "$path": "./satchel/src",
+      "Attribution": {
+        "$path": "./rojo-overrides/satchel/Attribution.luau"
+      }
+    },
+    "topbarplus": { "$path": "./topbarplus/src" }
   }
 }
