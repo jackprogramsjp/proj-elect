@@ -31,7 +31,7 @@ local DEFAULT_CORNER_RADIUS = UDim.new(0.18, 0)
 
 -- Weld tile image: oversized relative to frame so ClippedDescendantsFrame clips the overflow.
 local WELD_SIZE = UDim2.fromScale(15, 15)
-local WELD_TILE_SIZE = UDim2.new(0.200000003, 0, 0.300000012, 0)
+local WELD_TILE_SIZE = UDim2.fromScale(0.200000003, 0.300000012)
 
 local DEFAULT_STROKE_COLOR = Color3.new(0.0784314, 0.0784314, 0.0784314)
 local DEFAULT_STROKE_THICKNESS = 2.5
@@ -81,7 +81,7 @@ local function createWeldPattern()
 	return create("ImageLabel")({
 		Name = "Weld",
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Position = UDim2.fromScale(0.5, 0.5),
 		Size = WELD_SIZE,
 		SizeConstraint = Enum.SizeConstraint.RelativeXY,
 		BackgroundTransparency = 1,
@@ -105,7 +105,7 @@ local function createClippedDescendantsFrame()
 		Name = "ClippedDescendantsFrame",
 		AnchorPoint = Vector2.new(0, 0),
 		Position = UDim2.new(0, 0, 0, 0),
-		Size = UDim2.new(1, 0, 1, 0),
+		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ClipsDescendants = true,

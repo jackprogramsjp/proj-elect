@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 
 local guns = require("../../shared/constants/guns")
 local remotes = require("../../shared/remotes")
+local shotCadence = require("./shotCadence")
 
 local SERVER_FIRE_RATE_LIMIT = 50
 
@@ -75,15 +76,6 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 		return
 	end
 
-	local st = ensureState(player)
-	local now = tick() * 1000
-	if now - st.lastShot < SERVER_FIRE_RATE_LIMIT then
-		return
-	end
-	st.lastShot = now
-
-	playSound("Shoot", gun)
-
 	local gunStats = guns.getGunByName(gun.Name)
 	if not gunStats then
 		return
@@ -94,6 +86,15 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 	if distanceToTarget <= 0.001 then
 		return
 	end
+
+	local st = ensureState(player)
+	local now = tick() * 1000
+	if not shotCadence.canShoot(st.lastShot, now, gunStats, SERVER_FIRE_RATE_LIMIT) then
+		return
+	end
+	st.lastShot = now
+
+	playSound("Shoot", gun)
 
 	local dirUnit = direction.Unit
 

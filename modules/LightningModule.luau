@@ -9,6 +9,7 @@ Lightning module for effects of lightning
 ]]--
 
 -- Services
+local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
@@ -18,6 +19,7 @@ local BoatTween = require("../modules/BoatTween")
 
 -- Main Module
 local LightningModule = {}
+local BoatTweenAny = BoatTween :: any
 
 type LightningData = {
 	Points: { Vector3 }, -- Supplied by type of lightning
@@ -44,6 +46,7 @@ function LightningModule.Cast(data: LightningData)
 		attachment.Position = point
 		
 		if prevA then
+			local attachment0 = prevA
 			local dist = (attachment.Position - prevA.Position).Magnitude
 			local moveTime = dist / data.Speed / 2
 			
@@ -59,7 +62,7 @@ function LightningModule.Cast(data: LightningData)
 			beam.Brightness = 3
 			beam.Transparency = NumberSequence.new(0)
 			beam.Parent = workspace.Terrain
-			beam.Attachment0 = prevA
+			beam.Attachment0 = attachment0
 			beam.Attachment1 = attachment
 			
 			TweenService:Create(
@@ -68,7 +71,7 @@ function LightningModule.Cast(data: LightningData)
 				{ Position = point }
 			):Play()
 			
-			local boatTween = BoatTween:Create(
+			local boatTween = BoatTweenAny:Create(
 				beam,
 				{
 					Time = moveTime,
@@ -87,7 +90,7 @@ function LightningModule.Cast(data: LightningData)
 			task.delay(data.Time / 2, function()
 				boatTween:Destroy()
 				
-				local boatTween = BoatTween:Create(
+				local boatTween = BoatTweenAny:Create(
 					beam,
 					{
 						Time = data.Time / 2,
@@ -106,7 +109,7 @@ function LightningModule.Cast(data: LightningData)
 				
 				boatTween:Destroy()
 				TweenService:Create(
-					beam.Attachment0,
+					attachment0,
 					TweenInfo.new(moveTime, Enum.EasingStyle.Linear),
 					{
 						Position = point,
@@ -116,8 +119,7 @@ function LightningModule.Cast(data: LightningData)
 				task.wait(moveTime)
 				
 				beam:Destroy()
-				assert(beam.Attachment0)
-				beam.Attachment0:Destroy()
+				attachment0:Destroy()
 			end)
 			task.wait(moveTime)
 		end
@@ -125,7 +127,9 @@ function LightningModule.Cast(data: LightningData)
 		prevA = attachment
 	end
 	task.wait(data.Time)
-	game:GetService("Debris"):AddItem(prevA, 0.01) -- Just so if prevA is nil, nothing will error lol
+	if prevA then
+		Debris:AddItem(prevA, 0.01)
+	end
 end
 
 function LightningModule.Line(p1: Vector3, p2: Vector3, inputData: LightningInputData, segments: number, casts: number)
