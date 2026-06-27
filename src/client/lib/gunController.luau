@@ -6,6 +6,28 @@ local ammoStore = require("../stores/ammoStore")
 local guns = require("../../shared/constants/guns")
 local remotes = require("../../shared/remotes")
 
+type AmmoState = {
+	ammo: number,
+	reloading: boolean,
+	reloadThread: thread?,
+}
+
+local ammoStates: { [Tool]: AmmoState } = setmetatable({}, { __mode = "k" }) :: any
+
+local function getAmmoState(tool: Tool, maxAmmo: number): AmmoState
+	local state = ammoStates[tool]
+	if not state then
+		state = {
+			ammo = maxAmmo,
+			reloading = false,
+			reloadThread = nil,
+		}
+		ammoStates[tool] = state
+	end
+
+	return state
+end
+
 local function playSound(gun: Tool, name: string)
 	local handle = gun:FindFirstChild("Handle")
 	if not handle then
@@ -63,8 +85,7 @@ local function connect(equippedTool: Tool): () -> ()
 	local holding = false
 	local lastFire = 0
 	local maxAmmo = gunStats.maxAmmo or 0
-	local ammo = if hasAmmoLimit then maxAmmo else 0
-	local reloading = false
+	local ammoState = if hasAmmoLimit then getAmmoState(tool, maxAmmo) else nil
 
 	local fireDelay = 1 / gunStats.fireRate
 	local reloadTime = gunStats.reloadTime
@@ -72,7 +93,6 @@ local function connect(equippedTool: Tool): () -> ()
 
 	local activatedConnection: RBXScriptConnection? = nil
 	local deactivatedConnection: RBXScriptConnection? = nil
-	local reloadThread: thread? = nil
 
 	local function getAimPosition(): Vector3?
 		if not mouse then
@@ -97,7 +117,7 @@ local function connect(equippedTool: Tool): () -> ()
 	end
 
 	local function fireSingleShot()
-		if reloading or (hasAmmoLimit and ammo <= 0) then
+		if ammoState and (ammoState.reloading or ammoState.ammo <= 0) then
 			return
 		end
 
@@ -111,9 +131,9 @@ local function connect(equippedTool: Tool): () -> ()
 		local origin = getGunOrigin(tool)
 		if target and origin then
 			requestShot(origin, target)
-			if hasAmmoLimit then
-				ammo -= 1
-				updateAmmoDisplay(ammo, maxAmmo, false)
+			if ammoState then
+				ammoState.ammo -= 1
+				updateAmmoDisplay(ammoState.ammo, maxAmmo, false)
 			end
 		end
 	end
@@ -123,7 +143,7 @@ local function connect(equippedTool: Tool): () -> ()
 			return
 		end
 
-		while holding and not reloading and (not hasAmmoLimit or ammo > 0) do
+		while holding and (not ammoState or (not ammoState.reloading and ammoState.ammo > 0)) do
 			local now = tick()
 			if now - lastFire >= fireDelay then
 				fireSingleShot()
@@ -133,34 +153,37 @@ local function connect(equippedTool: Tool): () -> ()
 	end
 
 	local function startReload()
-		if not hasAmmoLimit then
+		if not ammoState then
 			return
 		end
-		if reloading then
+		if ammoState.reloading then
 			return
 		end
-		if ammo >= maxAmmo then
+		if ammoState.ammo >= maxAmmo then
 			return
 		end
 
-		reloading = true
-		updateAmmoDisplay(ammo, maxAmmo, true)
+		ammoState.reloading = true
+		updateAmmoDisplay(ammoState.ammo, maxAmmo, true)
 		playSound(tool, "Reload")
+		remotes.reloadGun:FireServer(tool)
 
-		if reloadThread then
-			task.cancel(reloadThread)
+		if ammoState.reloadThread then
+			task.cancel(ammoState.reloadThread)
 		end
 
-		reloadThread = task.delay(reloadTime, function()
-			ammo = maxAmmo
-			reloading = false
-			reloadThread = nil
-			updateAmmoDisplay(ammo, maxAmmo, false)
+		ammoState.reloadThread = task.delay(reloadTime, function()
+			ammoState.ammo = maxAmmo
+			ammoState.reloading = false
+			ammoState.reloadThread = nil
+			if tool.Parent == player.Character then
+				updateAmmoDisplay(ammoState.ammo, maxAmmo, false)
+			end
 		end)
 	end
 
 	local function onActivated()
-		if not hasAmmoLimit or ammo > 0 then
+		if not ammoState or ammoState.ammo > 0 then
 			if automatic then
 				holding = true
 				task.spawn(startAutoFire)
@@ -192,8 +215,8 @@ local function connect(equippedTool: Tool): () -> ()
 		mouse = player:GetMouse()
 		playSound(tool, "Equip")
 
-		if hasAmmoLimit then
-			updateAmmoDisplay(ammo, maxAmmo, false)
+		if ammoState then
+			updateAmmoDisplay(ammoState.ammo, maxAmmo, ammoState.reloading)
 		else
 			hideAmmoDisplay()
 		end
@@ -231,9 +254,6 @@ local function connect(equippedTool: Tool): () -> ()
 
 	return function()
 		holding = false
-		if reloadThread then
-			task.cancel(reloadThread)
-		end
 		disconnectInput()
 		equippedConnection:Disconnect()
 		unequippedConnection:Disconnect()

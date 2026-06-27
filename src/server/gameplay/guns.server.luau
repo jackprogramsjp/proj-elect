@@ -1,5 +1,6 @@
 local Players = game:GetService("Players")
 
+local gunAmmoState = require("./gunAmmoState")
 local guns = require("../../shared/constants/guns")
 local remotes = require("../../shared/remotes")
 
@@ -7,6 +8,7 @@ local SERVER_FIRE_RATE_LIMIT = 50
 
 type PlayerState = {
 	lastShot: number,
+	ammoByTool: { [Tool]: gunAmmoState.State },
 }
 
 local playerState: { [Player]: PlayerState } = {}
@@ -14,10 +16,22 @@ local playerState: { [Player]: PlayerState } = {}
 local function ensureState(player: Player): PlayerState
 	local state = playerState[player]
 	if not state then
-		state = { lastShot = 0 }
+		state = {
+			lastShot = 0,
+			ammoByTool = setmetatable({}, { __mode = "k" }) :: any,
+		}
 		playerState[player] = state
 	end
 	return state
+end
+
+local function getAmmoState(state: PlayerState, gun: Tool, gunStats: guns.GunInfo): gunAmmoState.State
+	local ammoState = state.ammoByTool[gun]
+	if not ammoState then
+		ammoState = gunAmmoState.new(gunStats)
+		state.ammoByTool[gun] = ammoState
+	end
+	return ammoState
 end
 
 local function playSound(name: string, gun: Tool)
@@ -75,6 +89,11 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 		return
 	end
 
+	local gunStats = guns.getGunByName(gun.Name)
+	if not gunStats then
+		return
+	end
+
 	local st = ensureState(player)
 	local now = tick() * 1000
 	if now - st.lastShot < SERVER_FIRE_RATE_LIMIT then
@@ -82,18 +101,18 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 	end
 	st.lastShot = now
 
-	playSound("Shoot", gun)
-
-	local gunStats = guns.getGunByName(gun.Name)
-	if not gunStats then
-		return
-	end
-
 	local direction = targetPos - origin
 	local distanceToTarget = direction.Magnitude
 	if distanceToTarget <= 0.001 then
 		return
 	end
+
+	local ammoState = getAmmoState(st, gun, gunStats)
+	if not gunAmmoState.recordShot(ammoState, gunStats) then
+		return
+	end
+
+	playSound("Shoot", gun)
 
 	local dirUnit = direction.Unit
 
@@ -135,6 +154,32 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 		position += nextDir
 		traveled += stepDistance
 	end
+end)
+
+remotes.reloadGun.OnServerEvent:Connect(function(player: Player, gun: Tool)
+	if not gun then
+		return
+	end
+
+	local gunStats = guns.getGunByName(gun.Name)
+	if not gunStats then
+		return
+	end
+
+	local st = ensureState(player)
+	local ammoState = getAmmoState(st, gun, gunStats)
+	local reloadToken = gunAmmoState.beginReload(ammoState, gunStats)
+	if not reloadToken then
+		return
+	end
+
+	task.delay(gunStats.reloadTime, function()
+		if playerState[player] ~= st then
+			return
+		end
+
+		gunAmmoState.finishReload(ammoState, gunStats, reloadToken)
+	end)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
