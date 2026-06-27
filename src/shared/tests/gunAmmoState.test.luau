@@ -1,7 +1,8 @@
 local gunAmmoState = require("../../server/gameplay/gunAmmoState")
+local guns = require("../constants/guns")
 local test = require("../../../tests/test")
 
-local limitedGun = {
+local limitedGun: guns.GunInfo = {
 	name = "Test Rifle",
 	description = "Test",
 	damage = 1,
@@ -13,7 +14,7 @@ local limitedGun = {
 	reloadTime = 1,
 }
 
-local unlimitedGun = {
+local unlimitedGun: guns.GunInfo = {
 	name = "Test Pistol",
 	description = "Test",
 	damage = 1,

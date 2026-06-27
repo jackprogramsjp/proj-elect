@@ -17,11 +17,11 @@ local ammoStates: { [Tool]: AmmoState } = setmetatable({}, { __mode = "k" }) :: 
 local function getAmmoState(tool: Tool, maxAmmo: number): AmmoState
 	local state = ammoStates[tool]
 	if not state then
-		state = {
+		state = ({
 			ammo = maxAmmo,
 			reloading = false,
 			reloadThread = nil,
-		}
+		} :: any) :: AmmoState
 		ammoStates[tool] = state
 	end
 
@@ -143,7 +143,14 @@ local function connect(equippedTool: Tool): () -> ()
 			return
 		end
 
-		while holding and (not ammoState or (not ammoState.reloading and ammoState.ammo > 0)) do
+		local function canContinueAutoFire(): boolean
+			if not ammoState then
+				return true
+			end
+			return not ammoState.reloading and ammoState.ammo > 0
+		end
+
+		while holding and canContinueAutoFire() do
 			local now = tick()
 			if now - lastFire >= fireDelay then
 				fireSingleShot()
@@ -153,31 +160,32 @@ local function connect(equippedTool: Tool): () -> ()
 	end
 
 	local function startReload()
-		if not ammoState then
+		local state = ammoState
+		if not state then
 			return
 		end
-		if ammoState.reloading then
+		if state.reloading then
 			return
 		end
-		if ammoState.ammo >= maxAmmo then
+		if state.ammo >= maxAmmo then
 			return
 		end
 
-		ammoState.reloading = true
-		updateAmmoDisplay(ammoState.ammo, maxAmmo, true)
+		state.reloading = true
+		updateAmmoDisplay(state.ammo, maxAmmo, true)
 		playSound(tool, "Reload")
 		remotes.reloadGun:FireServer(tool)
 
-		if ammoState.reloadThread then
-			task.cancel(ammoState.reloadThread)
+		if state.reloadThread then
+			task.cancel(state.reloadThread)
 		end
 
-		ammoState.reloadThread = task.delay(reloadTime, function()
-			ammoState.ammo = maxAmmo
-			ammoState.reloading = false
-			ammoState.reloadThread = nil
+		state.reloadThread = task.delay(reloadTime, function()
+			state.ammo = maxAmmo
+			state.reloading = false
+			state.reloadThread = nil
 			if tool.Parent == player.Character then
-				updateAmmoDisplay(ammoState.ammo, maxAmmo, false)
+				updateAmmoDisplay(state.ammo, maxAmmo, false)
 			end
 		end)
 	end
