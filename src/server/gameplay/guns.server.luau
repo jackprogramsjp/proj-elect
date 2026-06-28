@@ -110,6 +110,10 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 	end
 
 	local bulletSpeed = gunStats.bulletSpeed
+	if bulletSpeed <= 0 then
+		return
+	end
+
 	local stepTime = 0.1
 	local stepDistance = bulletSpeed * stepTime
 	local traveled = 0
@@ -134,6 +138,7 @@ remotes.shootGun.OnServerEvent:Connect(function(player: Player, gun: Tool, origi
 
 		position += nextDir
 		traveled += stepDistance
+		task.wait(stepTime)
 	end
 end)
 
