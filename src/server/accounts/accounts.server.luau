@@ -8,7 +8,14 @@ Players.PlayerAdded:Connect(function(player)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-	store:unload(player)
+	local ok, err = pcall(function()
+		store:unloadAsync(player)
+	end)
+
+	if not ok then
+		warn(`Failed to unload account for {player.Name}: {err}`)
+	end
+
 	accountStore.removeAccount(player.Name)
 end)
 
